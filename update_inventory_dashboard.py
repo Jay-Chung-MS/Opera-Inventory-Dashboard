@@ -334,6 +334,16 @@ for code, sku in sku_map.items():
         'sma3': fc.get('sma3', 0), 'wma3': fc.get('wma3', 0), 'ets': fc.get('ets', 0),
         'cv': fc.get('cv', 0), 'slope': fc.get('slope', 0),
         'is_b2b_top': code in b2b_codes,
+        # SKU 360°: 월별 출고 트렌드 + 판매계획
+        'ship_months': use_months,
+        'ship_trend': [round(ship_by_sku.get(code, {}).get(m, 0)) for m in use_months],
+        'plan_months': sorted(plan_orig.values()),
+        'plan_trend': [round(plan_by_sku.get(code, {}).get(m, 0)) for m in sorted(plan_orig.values())],
+        # 채널별 공급액
+        'ch_amounts': {ch: next((it['amount'] for it in items if it['code'] == code), 0)
+                       for ch, items in b2b_channels.items()},
+        # 추가 SKU 정보
+        'spec': sku['spec'], 'moq': sku['moq'], 'cat_m': sku['cat_m'], 'cat_s': sku['cat_s'],
     }
     alert_list.append(entry)
 

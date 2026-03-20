@@ -102,6 +102,7 @@ tr:hover td{background:var(--surface2);}
   <div class="nav-tab" onclick="showPage('alerts',this)">재고 알람</div>
   <div class="nav-tab" onclick="showPage('channels',this)">채널별 Top SKU</div>
   <div class="nav-tab" onclick="showPage('forecast',this)">수요예측</div>
+  <div class="nav-tab" onclick="showPage('sku360',this)">SKU 360°</div>
   <div class="nav-right" id="updated"></div>
 </nav>
 
@@ -241,6 +242,55 @@ tr:hover td{background:var(--surface2);}
     </label>
   </div>
   <div class="tbl-scroll" id="fc-table-wrap"></div>
+</div>
+
+<!-- ═══════ SKU 360° ═══════ -->
+<div class="page" id="pg-sku360">
+  <div style="display:flex;gap:12px;margin-bottom:20px;align-items:center;">
+    <input class="search-box" id="sku360-search" style="width:400px;font-size:14px;padding:10px 16px;" placeholder="품번 또는 제품명으로 검색..." oninput="searchSKU360()">
+    <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;">
+      <input type="checkbox" id="sku360-b2b" onchange="searchSKU360()" checked> B2B Top만
+    </label>
+    <span style="font-size:12px;color:var(--muted);" id="sku360-count"></span>
+  </div>
+  <div id="sku360-list" style="margin-bottom:20px;"></div>
+  <div id="sku360-detail" style="display:none;">
+    <!-- 상단: 기본 정보 + 알람 -->
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;">
+      <div id="s360-header" style="font-size:18px;font-weight:700;"></div>
+    </div>
+
+    <!-- 4분할 KPI -->
+    <div class="kpi-grid" id="s360-kpi" style="grid-template-columns:repeat(5,1fr);"></div>
+
+    <!-- 2분할: 출고 트렌드 + 계획 vs 실적 -->
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">월별 출고 트렌드 <span>최근 14개월 / 단위: EA</span></div>
+        <div style="height:250px;"><canvas id="s360-chart-trend"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">판매계획(목표) vs 출고실적 <span>겹치는 기간 비교</span></div>
+        <div style="height:250px;"><canvas id="s360-chart-plan"></canvas></div>
+      </div>
+    </div>
+
+    <!-- 3분할: 재고 상세 / 유통채널 / 발주 계산 -->
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-title">재고 상세</div>
+        <div id="s360-inventory"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">유통 채널</div>
+        <div id="s360-channels"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">발주 계산기</div>
+        <div id="s360-order"></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -679,6 +729,174 @@ function showSKUDetail(code) {
     </div>`;
 }
 
+// ═══ SKU 360° ═══
+let s360TrendChart = null;
+let s360PlanChart = null;
+
+function searchSKU360() {
+  const q = (document.getElementById('sku360-search').value||'').toLowerCase();
+  const b2bOnly = document.getElementById('sku360-b2b').checked;
+
+  if(!q || q.length < 2) {
+    // 검색어 없으면 전체 리스트 (긴급부족 우선)
+    let items = D.alerts.filter(e => e.level !== 'none');
+    if(b2bOnly) items = items.filter(e => e.is_b2b_top);
+    document.getElementById('sku360-count').textContent = `${items.length}개 SKU`;
+    renderSKU360List(items.slice(0, 30));
+    return;
+  }
+
+  let items = D.alerts.filter(e => e.code.toLowerCase().includes(q) || (e.name||'').toLowerCase().includes(q));
+  if(b2bOnly) items = items.filter(e => e.is_b2b_top);
+  document.getElementById('sku360-count').textContent = `${items.length}개 검색됨`;
+  renderSKU360List(items.slice(0, 20));
+}
+
+function renderSKU360List(items) {
+  let html = '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+  items.forEach(e => {
+    html += `<div onclick="renderSKU360('${e.code}')" style="cursor:pointer;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;min-width:200px;flex:1;max-width:320px;transition:border-color .15s;"
+      onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:11px;font-family:monospace;color:var(--muted);">${e.code}</span>
+        ${badgeHTML(e.level)}
+      </div>
+      <div style="font-size:13px;font-weight:500;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${e.name||''}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px;">가용 ${fmt(e.available)} EA / 소진 ${e.days_left!=null?e.days_left+'일':'-'}</div>
+    </div>`;
+  });
+  html += '</div>';
+  document.getElementById('sku360-list').innerHTML = html;
+}
+
+function renderSKU360(code) {
+  const e = D.alerts.find(a => a.code === code);
+  if(!e) return;
+
+  document.getElementById('sku360-detail').style.display = 'block';
+
+  // 헤더
+  document.getElementById('s360-header').innerHTML = `
+    <span style="color:var(--accent)">${e.code}</span>
+    <span style="font-weight:400;font-size:14px;margin-left:8px;">${e.name||''}</span>
+    <span style="font-size:12px;color:var(--muted);margin-left:8px;">${e.spec||''} / ${e.line||''} / ${e.cat_m||''} > ${e.cat_s||''}</span>
+    <span style="margin-left:12px;">${badgeHTML(e.level)}</span>`;
+
+  // KPI 5개
+  const daysColor = e.days_left && e.days_left <= e.lead_time ? 'var(--red)' :
+                    e.days_left && e.days_left <= e.lead_time*1.5 ? 'var(--orange)' : 'var(--text)';
+  document.getElementById('s360-kpi').innerHTML = `
+    <div class="kpi"><div class="kpi-label">가용재고</div><div class="kpi-val">${fmt(e.available)}</div>
+      <div class="kpi-sub">현재고 ${fmt(e.current)} EA</div></div>
+    <div class="kpi"><div class="kpi-label">월예측출고</div><div class="kpi-val" style="color:var(--accent)">${fmt(e.forecast)}</div>
+      <div class="kpi-sub">일예측출고 ${e.daily} EA</div></div>
+    <div class="kpi"><div class="kpi-label">재고소진일</div><div class="kpi-val" style="color:${daysColor}">${e.days_left!=null?fmt(e.days_left)+'일':'-'}</div>
+      <div class="kpi-sub">리드타임 ${e.lead_time}일</div></div>
+    <div class="kpi"><div class="kpi-label">판매계획(3월)</div><div class="kpi-val">${fmt(e.plan_03)}</div>
+      <div class="kpi-sub">4월 ${fmt(e.plan_04)} EA</div></div>
+    <div class="kpi"><div class="kpi-label">수요변동(CV%)</div><div class="kpi-val" style="color:${e.cv>30?'var(--orange)':'var(--text)'}">${e.cv}%</div>
+      <div class="kpi-sub">${e.cv<=15?'안정적':e.cv<=30?'보통':'불안정'} 수요</div></div>`;
+
+  // 출고 트렌드 차트
+  if(s360TrendChart) s360TrendChart.destroy();
+  const shipMonths = e.ship_months || [];
+  const shipTrend = e.ship_trend || [];
+  s360TrendChart = new Chart(document.getElementById('s360-chart-trend'), {
+    type:'bar',
+    data:{labels:shipMonths, datasets:[{
+      data:shipTrend,
+      backgroundColor:shipTrend.map((v,i) => i>=shipMonths.length-3 ? 'rgba(88,166,255,0.5)' : 'rgba(88,166,255,0.25)'),
+      borderColor:'#58a6ff', borderWidth:1
+    }]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},
+      tooltip:{callbacks:{label:ctx=>fmt(ctx.raw)+' EA'}}},
+      scales:{y:{grid:{color:'#21262d'},ticks:{callback:v=>fmtEA(v)}},x:{grid:{display:false}}}}
+  });
+
+  // 판매계획 vs 실적 차트
+  if(s360PlanChart) s360PlanChart.destroy();
+  const planMonths = e.plan_months || [];
+  const planTrend = e.plan_trend || [];
+  // 출고실적에서 겹치는 월만
+  const overlapMonths = planMonths.filter(m => shipMonths.includes(m));
+  const overlapPlan = overlapMonths.map(m => planTrend[planMonths.indexOf(m)] || 0);
+  const overlapShip = overlapMonths.map(m => shipTrend[shipMonths.indexOf(m)] || 0);
+
+  s360PlanChart = new Chart(document.getElementById('s360-chart-plan'), {
+    type:'bar',
+    data:{labels:overlapMonths, datasets:[
+      {label:'판매계획(목표)',data:overlapPlan,backgroundColor:'rgba(88,166,255,0.3)',borderColor:'#58a6ff',borderWidth:1},
+      {label:'출고실적',data:overlapShip,backgroundColor:'rgba(63,185,80,0.3)',borderColor:'#3fb950',borderWidth:1}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      scales:{y:{grid:{color:'#21262d'},ticks:{callback:v=>fmtEA(v)}},x:{grid:{display:false}}},
+      plugins:{legend:{labels:{color:'#8b949e',font:{size:11}}},
+        tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+fmt(Math.round(ctx.raw))+' EA'}}}}
+  });
+
+  // 재고 상세
+  document.getElementById('s360-inventory').innerHTML = `
+    <table style="font-size:13px;">
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">현재고</td><td style="padding:6px 0;font-weight:600">${fmt(e.current)} EA</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">가용재고</td><td style="padding:6px 0;font-weight:600;color:var(--accent)">${fmt(e.available)} EA</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">입고예정</td><td style="padding:6px 0">${fmt(e.incoming)} EA</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">출고예정</td><td style="padding:6px 0">${fmt(e.outgoing)} EA</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">재고소진일</td><td style="padding:6px 0;font-weight:600;color:${daysColor}">${e.days_left!=null?fmt(e.days_left)+'일':'-'}</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">리드타임</td><td style="padding:6px 0">${e.lead_time}일</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">MOQ</td><td style="padding:6px 0">${e.moq ? fmt(e.moq)+' EA' : '-'}</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">관리방식</td><td style="padding:6px 0">${e.mgmt||'-'}</td></tr>
+    </table>`;
+
+  // 유통 채널
+  const chAmounts = e.ch_amounts || {};
+  const activeChannels = Object.entries(chAmounts).filter(([k,v]) => v > 0).sort((a,b) => b[1]-a[1]);
+  let chHtml = '';
+  if(activeChannels.length > 0) {
+    chHtml = '<table style="font-size:13px;">';
+    chHtml += '<tr><th style="text-align:left">채널</th><th>25년 공급액</th></tr>';
+    activeChannels.forEach(([ch, amt]) => {
+      const isOvs = OVERSEAS_CH.has(ch);
+      chHtml += `<tr><td style="text-align:left"><span class="ch-tag ${isOvs?'overseas':''}" style="font-size:12px;">${ch}</span></td>
+        <td>${(amt/1e6).toFixed(0)}백만</td></tr>`;
+    });
+    chHtml += '</table>';
+  } else {
+    chHtml = '<div style="color:var(--muted);font-size:13px;">B2B Top 채널에 미포함</div>';
+  }
+  if(e.channels && e.channels.length > 0 && activeChannels.length === 0) {
+    chHtml += `<div style="margin-top:8px;">${channelTags(e.channels)}</div>`;
+  }
+  document.getElementById('s360-channels').innerHTML = chHtml;
+
+  // 발주 계산기
+  const lt = e.lead_time;
+  const daily = e.daily || 0;
+  const safetyStock = Math.round(daily * lt * 1.5);
+  const needOrder = Math.max(0, safetyStock - e.available + Math.round(daily * lt));
+  const moqAdj = e.moq > 0 ? Math.ceil(needOrder / e.moq) * e.moq : needOrder;
+
+  document.getElementById('s360-order').innerHTML = `
+    <table style="font-size:13px;">
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">일예측출고</td><td style="padding:6px 0">${e.daily} EA/일</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">발주점 (L/T분)</td><td style="padding:6px 0">${fmt(Math.round(daily * lt))} EA</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">안전재고 (L/T×1.5)</td><td style="padding:6px 0">${fmt(safetyStock)} EA</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">현재 가용</td><td style="padding:6px 0">${fmt(e.available)} EA</td></tr>
+      <tr><td style="text-align:left;color:var(--muted);padding:6px 12px 6px 0;">입고예정</td><td style="padding:6px 0">${fmt(e.incoming)} EA</td></tr>
+      <tr style="border-top:1px solid var(--border);">
+        <td style="text-align:left;padding:8px 12px 6px 0;font-weight:600;color:var(--accent)">권장 발주량</td>
+        <td style="padding:8px 0;font-weight:700;font-size:18px;color:var(--accent)">${fmt(needOrder)} EA</td></tr>
+      ${e.moq > 0 ? `<tr><td style="text-align:left;color:var(--muted);padding:4px 12px 6px 0;">MOQ 반영</td>
+        <td style="padding:4px 0;font-weight:600">${fmt(moqAdj)} EA (MOQ ${fmt(e.moq)})</td></tr>` : ''}
+    </table>
+    <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6;">
+      * 권장 = 안전재고 - 가용 + L/T기간 출고<br>
+      * 입고예정 ${fmt(e.incoming)}EA는 별도 고려<br>
+      * WMA3: ${fmt(e.wma3)} / ETS: ${fmt(e.ets)}
+    </div>`;
+
+  document.getElementById('sku360-detail').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
 // ═══ 초기화 ═══
 async function init() {
   const resp = await fetch('inventory_data.json');
@@ -688,6 +906,7 @@ async function init() {
   renderAlerts();
   renderChannels();
   renderForecast();
+  searchSKU360();
 }
 init();
 </script>
