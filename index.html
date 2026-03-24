@@ -101,6 +101,7 @@ th[data-tooltip]{position:sticky;top:0;}
   <div class="nav-tab active" onclick="showPage('overview',this)">전체 현황</div>
   <div class="nav-tab" onclick="showPage('sku',this)">SKU 관리</div>
   <div class="nav-tab" onclick="showPage('forecast',this)">수요예측</div>
+  <div class="nav-tab" onclick="showPage('schedule',this)">발주 스케줄</div>
   <div class="nav-right" id="updated"></div>
 </nav>
 
@@ -236,8 +237,34 @@ th[data-tooltip]{position:sticky;top:0;}
   <div class="tbl-scroll" id="fc-table-wrap"></div>
 </div>
 
+<!-- ═══ 발주 스케줄 ═══ -->
+<div class="page" id="pg-schedule">
+  <div class="kpi-grid" id="kpi-schedule"></div>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-title">입고/출고 스케줄 타임라인 <span>S95+S90 합산 (상/하반월)</span></div>
+    <div style="height:340px"><canvas id="chart-schedule-timeline"></canvas></div>
+  </div>
+  <div class="section-title">S95/S90 제품 현황</div>
+  <div class="filter-bar">
+    <span style="font-size:11px;color:var(--muted);margin-right:4px;">등급:</span>
+    <div class="filter-btn active" onclick="setSchedTier('all',this)">전체</div>
+    <div class="filter-btn" onclick="setSchedTier('S95',this)">S95</div>
+    <div class="filter-btn" onclick="setSchedTier('S90',this)">S90</div>
+    <span class="filter-sep">|</span>
+    <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;">
+      <input type="checkbox" id="sched-order-only" onchange="filterScheduleTable()"> 발주필요만
+    </label>
+    <span style="font-size:12px;color:var(--muted);" id="sched-count"></span>
+  </div>
+  <div class="tbl-scroll" style="max-height:520px;" id="sched-table-wrap"></div>
+  <div class="section-title" style="margin-top:24px;">입고 대기 현황</div>
+  <div id="sched-pending-wrap"></div>
+</div>
+
 <script>
 let D=null, skuAlertFilter='all', skuChFilter='all';
+let schedTierFilter='all';
+let schedTimelineChart=null;
 let s360C1=null, s360C2=null;
 
 const LEVELS={critical:'긴급부족',warning:'부족위험',caution:'주의',normal:'정상',surplus:'여유',excess:'과잉재고',slow:'부진재고',none:'-'};
@@ -492,11 +519,158 @@ function filterFC(){
   h+='</table>';document.getElementById('fc-table-wrap').innerHTML=h;
 }
 
+// ═══ 발주 스케줄 ═══
+function renderSchedule(){
+  if(!D.schedule) return;
+  const sc=D.schedule, sm=sc.summary;
+
+  // KPIs
+  document.getElementById('kpi-schedule').innerHTML=`
+    <div class="kpi"><div class="kpi-label">S95 관리 제품</div><div class="kpi-val">${fmt(sm.s95_count)}개</div>
+      <div class="kpi-sub">핵심 SKU</div></div>
+    <div class="kpi"><div class="kpi-label">S90 관리 제품</div><div class="kpi-val">${fmt(sm.s90_count)}개</div>
+      <div class="kpi-sub">주요 SKU</div></div>
+    <div class="kpi"><div class="kpi-label" style="color:var(--red)">발주 필요</div><div class="kpi-val" style="color:var(--red)">${fmt(sm.order_needed)}개</div>
+      <div class="kpi-sub">즉시 발주 검토</div></div>
+    <div class="kpi"><div class="kpi-label">입고 대기</div><div class="kpi-val">${fmt(sm.pending_orders_count)}건</div>
+      <div class="kpi-sub">${fmt(sm.pending_orders_qty)}개</div></div>`;
+
+  // Timeline chart: aggregate schedule across all items
+  const periods=['3월상','3월하','4월상','4월하','5월상','5월하','6월상','6월하','7월상','7월하','8월상','8월하'];
+  const aggIncoming=new Array(12).fill(0);
+  const aggOutgoing=new Array(12).fill(0);
+  const aggBalance=new Array(12).fill(0);
+
+  sc.items.forEach(item=>{
+    if(item.schedule){
+      item.schedule.forEach((s,i)=>{
+        if(i<12){
+          aggIncoming[i]+=s.incoming||0;
+          aggOutgoing[i]+=s.outgoing||0;
+          aggBalance[i]+=s.balance||0;
+        }
+      });
+    }
+  });
+
+  // Cumulative balance
+  const cumBalance=[];
+  let cum=0;
+  aggBalance.forEach(b=>{cum+=b;cumBalance.push(cum);});
+
+  if(schedTimelineChart) schedTimelineChart.destroy();
+  schedTimelineChart=new Chart(document.getElementById('chart-schedule-timeline'),{
+    type:'bar',
+    data:{
+      labels:periods,
+      datasets:[
+        {label:'입고예정',data:aggIncoming,backgroundColor:'rgba(45,138,78,0.5)',borderColor:'#2d8a4e',borderWidth:1,order:2},
+        {label:'출고예정',data:aggOutgoing.map(v=>-v),backgroundColor:'rgba(204,0,0,0.35)',borderColor:'#CC0000',borderWidth:1,order:2},
+        {label:'누적 과부족',data:cumBalance,type:'line',borderColor:'#0F9ED5',backgroundColor:'rgba(15,158,213,0.08)',fill:true,tension:.3,pointRadius:4,pointBackgroundColor:'#0F9ED5',yAxisID:'y',order:1}
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      scales:{
+        x:{grid:{display:false},stacked:true},
+        y:{grid:{color:'#e0e0e0'},stacked:true,ticks:{callback:v=>fmtEA(v)}}
+      },
+      plugins:{
+        legend:{labels:{color:'#666',font:{size:11}}},
+        tooltip:{callbacks:{label:ctx=>{
+          const v=ctx.raw;
+          return ctx.dataset.label+': '+fmt(Math.abs(Math.round(v)))+' EA';
+        }}}
+      }
+    }
+  });
+
+  filterScheduleTable();
+  renderPendingOrders();
+}
+
+function setSchedTier(t,el){
+  schedTierFilter=t;
+  document.querySelectorAll('#pg-schedule .filter-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  filterScheduleTable();
+}
+
+function filterScheduleTable(){
+  if(!D.schedule) return;
+  let items=D.schedule.items.slice();
+  if(schedTierFilter!=='all') items=items.filter(x=>x.tier===schedTierFilter);
+  const orderOnly=document.getElementById('sched-order-only').checked;
+  if(orderOnly) items=items.filter(x=>x.order_needed&&x.order_needed.includes('발주필요'));
+
+  document.getElementById('sched-count').textContent=items.length+'개';
+
+  let h=`<table><tr>
+    <th style="text-align:center;width:50px">등급</th>
+    <th>제품코드</th><th>제품명</th>
+    <th>L/T</th><th>평균판매량</th><th>현재고</th><th>재고월수</th>
+    <th>안전재고</th><th>L/T후 재고일수</th><th>발주필요</th><th>발주량</th></tr>`;
+  items.forEach(e=>{
+    const tierBg=e.tier==='S95'?'background:#ffeaea;color:#CC0000':'background:#fff3e0;color:#b8860b';
+    const needColor=e.order_needed&&e.order_needed.includes('발주필요')?'color:var(--red);font-weight:600':'';
+    const daysColor=e.days_after_lt!==null&&e.days_after_lt<=0?'color:var(--red);font-weight:600':e.days_after_lt<30?'color:var(--orange);font-weight:600':'';
+    h+=`<tr>
+      <td style="text-align:center"><span class="badge" style="${tierBg}">${e.tier}</span></td>
+      <td style="font-size:11px;font-family:monospace">${e.code}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name||''}</td>
+      <td>${e.lt}일</td>
+      <td>${fmt(e.avg_sales)}</td>
+      <td>${fmt(e.stock)}</td>
+      <td>${e.stock_months}</td>
+      <td>${fmt(e.safety_stock)}</td>
+      <td style="${daysColor}">${e.days_after_lt}일</td>
+      <td style="${needColor}">${e.order_needed||'-'}</td>
+      <td>${e.order_qty?fmt(e.order_qty):'-'}</td></tr>`;
+  });
+  h+='</table>';
+  document.getElementById('sched-table-wrap').innerHTML=h;
+}
+
+function renderPendingOrders(){
+  if(!D.schedule) return;
+  const orders=D.schedule.pending_orders;
+  if(!orders||!orders.length){
+    document.getElementById('sched-pending-wrap').innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px;">입고 대기 건 없음</div>';
+    return;
+  }
+
+  // Group by period
+  const grouped={};
+  orders.forEach(o=>{
+    const p=o.period||'미정';
+    if(!grouped[p]) grouped[p]=[];
+    grouped[p].push(o);
+  });
+
+  let h='';
+  for(const[period, items] of Object.entries(grouped)){
+    const totalQty=items.reduce((s,o)=>s+o.qty,0);
+    h+=`<div class="card" style="margin-bottom:12px;">
+      <div class="card-title">${period} 입고예정 <span>${items.length}건 / ${fmt(totalQty)}개</span></div>
+      <table><tr><th>제품코드</th><th>제품명</th><th>발주잔량</th><th>발주일</th><th style="text-align:center">상태</th></tr>`;
+    items.forEach(o=>{
+      h+=`<tr>
+        <td style="font-size:11px;font-family:monospace">${o.code}</td>
+        <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${o.name||''}</td>
+        <td>${fmt(o.qty)}</td>
+        <td>${o.order_date||'-'}</td>
+        <td style="text-align:center"><span class="badge" style="background:#e3f2fd;color:#156082">${o.status||'-'}</span></td></tr>`;
+    });
+    h+='</table></div>';
+  }
+  document.getElementById('sched-pending-wrap').innerHTML=h;
+}
+
 // ═══ init ═══
 async function init(){
   const r=await fetch('inventory_data.json');D=await r.json();
   document.getElementById('updated').textContent='Updated: '+D.updated;
-  renderOverview();renderSKU();renderFC();
+  renderOverview();renderSKU();renderFC();renderSchedule();
 }
 init();
 </script>

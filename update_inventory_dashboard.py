@@ -15,7 +15,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 # ── 파일 경로 설정 ──────────────────────────────────────────
 SALES_JSON = r'C:\Users\user\AppData\Local\Temp\opsdb\data.json'
-SOP_FILE = r'C:\Users\user\Downloads\260225_SI Value up P2E_발주 운영 파일 2월 4주차_r123_회의후.xlsx'
+SOP_FILE = r'C:\Users\user\Downloads\260318_SI Value up P2E_발주 운영 파일 3월 3주차_r126(PE 공유용).xlsx'
 INVENTORY_FILE = r'C:\Users\user\Downloads\가용재고조회_20260318.xlsx'
 B2B_FILE = r'C:\Users\user\Downloads\B2B_SKU_분석_통합본_260312.xlsx'
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -66,11 +66,11 @@ for row in ws_sku.iter_rows(min_row=3, max_row=ws_sku.max_row, values_only=True)
         'cat_s': str(row[7]) if row[7] else '',
         'mgmt': str(row[9]) if row[9] else '',
         'status': str(row[10]) if row[10] else '',
-        'name': str(row[13]) if row[13] else '',
-        'spec': str(row[15]) if row[15] else '',
-        'lead_time': safe_int(row[18]) if row[18] else 45,
-        'moq': safe_int(row[20]) if row[20] else 0,
-        'price': safe_float(row[21]) if row[21] else 0,
+        'name': str(row[11]) if row[11] else '',
+        'spec': str(row[13]) if row[13] else '',
+        'lead_time': safe_int(row[16]) if row[16] else 45,
+        'moq': safe_int(row[18]) if len(row) > 18 and row[18] else 0,
+        'price': 0,
     }
     if old_code:
         old_to_new[old_code] = new_code
@@ -483,6 +483,177 @@ for ch, ch_data in channel_summary.items():
         sku_entry['trend'] = [round(monthly.get(m, 0)) for m in use_months[-6:]]
         sku_entry['trend_months'] = use_months[-6:]
 
+# ── S95/S90 과부족 + 입고계획 ──
+print("[5-b] S95/S90 과부족 + 입고계획...")
+wb_sop = openpyxl.load_workbook(SOP_FILE, data_only=True)
+
+schedule_items = []
+
+for tier_name, sheet_name in [('S95', 'MTS-s95'), ('S90', 'MTS-s90')]:
+    try:
+        ws_mts = wb_sop[sheet_name]
+    except KeyError:
+        print(f"  시트 '{sheet_name}' 없음 - 건너뜀")
+        continue
+
+    rows_data = list(ws_mts.iter_rows(min_row=14, max_row=ws_mts.max_row, values_only=True))
+    if len(rows_data) < 3:
+        continue
+
+    # Row 14 (index 0): date headers from col 33 onwards (0-indexed col 32)
+    date_row = rows_data[0]
+
+    # Extract monthly history labels (cols 33-50, 0-indexed 32-49)
+    history_months = []
+    for ci in range(32, min(50, len(date_row))):
+        val = date_row[ci]
+        if val is None:
+            break
+        if hasattr(val, 'strftime'):
+            history_months.append(val.strftime('%y-%m'))
+        else:
+            history_months.append(str(val))
+
+    # Schedule period columns: 53,54=3월상/하, 55,56=4월상/하, ... 63,64=8월상/하
+    schedule_periods = ['3월상', '3월하', '4월상', '4월하', '5월상', '5월하',
+                        '6월상', '6월하', '7월상', '7월하', '8월상', '8월하']
+    schedule_cols = [52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]  # 0-indexed
+
+    # Data starts at row 17 (index 3 from row 14), each product uses 6 rows
+    data_start_idx = 3  # row 17 = index 3 relative to row 14
+    r_idx = data_start_idx
+    while r_idx + 5 < len(rows_data):
+        row_incoming = rows_data[r_idx]       # 입고
+        row_outgoing = rows_data[r_idx + 1]   # 출고 Total
+        row_balance = rows_data[r_idx + 5]    # 과부족
+
+        # Validate this is a product block by checking type markers
+        type_check_incoming = row_incoming[30] if len(row_incoming) > 30 else None
+        type_check_balance = row_balance[30] if len(row_balance) > 30 else None
+
+        # Extract product code from first row of block
+        code = str(row_incoming[2]).strip() if row_incoming[2] else ''
+        if not code or code == 'None':
+            r_idx += 6
+            continue
+
+        name = str(row_incoming[7]).strip() if row_incoming[7] else ''
+        line = str(row_incoming[6]).strip() if row_incoming[6] else ''
+        spec = str(row_incoming[8]).strip() if row_incoming[8] else ''
+        lead_time = safe_int(row_incoming[15]) if len(row_incoming) > 15 else 0
+        avg_sales = safe_int(row_incoming[16]) if len(row_incoming) > 16 else 0
+        current_stock = safe_int(row_incoming[17]) if len(row_incoming) > 17 else 0
+        stock_months = safe_float(row_incoming[18]) if len(row_incoming) > 18 else 0
+        safety_stock = safe_int(row_incoming[20]) if len(row_incoming) > 20 else 0
+        days_after_lt = safe_float(row_incoming[22]) if len(row_incoming) > 22 else 0
+        order_needed = str(row_incoming[23]).strip() if len(row_incoming) > 23 and row_incoming[23] else ''
+        order_qty = safe_int(row_incoming[26]) if len(row_incoming) > 26 else 0
+        issue_text = str(row_incoming[28]).strip() if len(row_incoming) > 28 and row_incoming[28] else ''
+
+        # Monthly history values
+        hist_incoming = []
+        hist_outgoing = []
+        hist_balance = []
+        for ci in range(32, 32 + len(history_months)):
+            if ci < len(row_incoming):
+                hist_incoming.append(safe_int(row_incoming[ci]))
+            else:
+                hist_incoming.append(0)
+            if ci < len(row_outgoing):
+                hist_outgoing.append(safe_int(row_outgoing[ci]))
+            else:
+                hist_outgoing.append(0)
+            if ci < len(row_balance):
+                hist_balance.append(safe_int(row_balance[ci]))
+            else:
+                hist_balance.append(0)
+
+        # Future schedule (상/하반월)
+        schedule = []
+        for pi, col_i in enumerate(schedule_cols):
+            if pi < len(schedule_periods):
+                inc_val = safe_int(row_incoming[col_i]) if col_i < len(row_incoming) else 0
+                out_val = safe_int(row_outgoing[col_i]) if col_i < len(row_outgoing) else 0
+                bal_val = safe_int(row_balance[col_i]) if col_i < len(row_balance) else 0
+                schedule.append({
+                    'period': schedule_periods[pi],
+                    'incoming': inc_val,
+                    'outgoing': out_val,
+                    'balance': bal_val,
+                })
+
+        schedule_item = {
+            'code': code,
+            'name': name,
+            'line': line,
+            'tier': tier_name,
+            'lt': lead_time,
+            'avg_sales': avg_sales,
+            'stock': current_stock,
+            'stock_months': round(stock_months, 1),
+            'safety_stock': safety_stock,
+            'days_after_lt': round(days_after_lt, 1) if days_after_lt else 0,
+            'order_needed': order_needed,
+            'order_qty': order_qty,
+            'issue': issue_text,
+            'history_months': history_months,
+            'history_incoming': hist_incoming,
+            'history_outgoing': hist_outgoing,
+            'history_balance': hist_balance,
+            'schedule': schedule,
+        }
+        schedule_items.append(schedule_item)
+        r_idx += 6
+
+    print(f"  {tier_name}: {sum(1 for x in schedule_items if x['tier']==tier_name)}개 제품")
+
+# Sort by days_after_lt ascending
+schedule_items.sort(key=lambda x: x['days_after_lt'] if x['days_after_lt'] else 9999)
+
+# 입고계획 (Pending Orders)
+pending_orders = []
+try:
+    ws_po = wb_sop['입고계획']
+    for row in ws_po.iter_rows(min_row=6, max_row=ws_po.max_row, values_only=True):
+        if row[1] is None:
+            continue
+        status = str(row[9]).strip() if len(row) > 9 and row[9] else ''
+        qty = safe_int(row[8]) if len(row) > 8 else 0
+        if status == '입고완료' or qty <= 0:
+            continue
+
+        order_date_val = row[2] if len(row) > 2 else None
+        if hasattr(order_date_val, 'strftime'):
+            order_date_str = order_date_val.strftime('%Y-%m-%d')
+        else:
+            order_date_str = str(order_date_val) if order_date_val else ''
+
+        period_val = str(row[7]).strip() if len(row) > 7 and row[7] else ''
+
+        pending_orders.append({
+            'order_no': str(row[1]).strip() if len(row) > 1 and row[1] else '',
+            'order_date': order_date_str,
+            'code': str(row[4]).strip() if len(row) > 4 and row[4] else '',
+            'name': str(row[5]).strip() if len(row) > 5 and row[5] else '',
+            'period': period_val,
+            'qty': qty,
+            'status': status,
+        })
+except KeyError:
+    print("  시트 '입고계획' 없음")
+
+# Sort pending orders by period
+period_order = {'3상': 0, '3하': 1, '4상': 2, '4하': 3, '5상': 4, '5하': 5,
+                '6상': 6, '6하': 7, '7상': 8, '7하': 9, '8상': 10, '8하': 11}
+pending_orders.sort(key=lambda x: period_order.get(x['period'], 99))
+
+s95_items = [x for x in schedule_items if x['tier'] == 'S95']
+s90_items = [x for x in schedule_items if x['tier'] == 'S90']
+order_needed_count = sum(1 for x in schedule_items if '발주필요' in x.get('order_needed', ''))
+
+wb_sop.close()
+print(f"  총 {len(schedule_items)}개 제품, 입고대기 {len(pending_orders)}건 ({sum(x['qty'] for x in pending_orders):,}개)")
+
 # ── JSON 출력 ──
 total_active = sum(1 for e in alert_list if e['level'] != 'none')
 
@@ -516,6 +687,17 @@ output = {
     },
     'categories': [{'name': k, **v} for k, v in cat_sorted],
     'channels': channel_summary,
+    'schedule': {
+        'items': schedule_items,
+        'pending_orders': pending_orders,
+        'summary': {
+            's95_count': len(s95_items),
+            's90_count': len(s90_items),
+            'order_needed': order_needed_count,
+            'pending_orders_count': len(pending_orders),
+            'pending_orders_qty': sum(x['qty'] for x in pending_orders),
+        }
+    },
 }
 
 # ── 매출 데이터 연결 (Sales Dashboard data.json) ──
