@@ -108,6 +108,7 @@ th[data-tooltip]{position:sticky;top:0;}
 <!-- ═══ 전체 현황 ═══ -->
 <div class="page active" id="pg-overview">
   <div class="kpi-grid" id="kpi-overview"></div>
+  <div class="card" id="card-weekly-change" style="margin-bottom:16px;"></div>
   <div class="grid-2">
     <div class="card">
       <div class="card-title">재고 알람 분포</div>
@@ -139,12 +140,7 @@ th[data-tooltip]{position:sticky;top:0;}
       <div style="height:260px"><canvas id="chart-fcst-trend"></canvas></div>
     </div>
   </div>
-  <!-- 주간 변화 + 입고 vs FCST Gap -->
-  <div class="grid-2">
-    <div class="card" id="card-weekly-change"></div>
-    <div class="card" id="card-channel-risk"></div>
-  </div>
-  <div class="card" id="card-supply-gap" style="margin-bottom:16px;"></div>
+  <div class="card" id="card-channel-risk" style="margin-bottom:16px;"></div>
 </div>
 
 <!-- ═══ SKU 관리 (알람 + 채널 + 360° 통합) ═══ -->
@@ -265,6 +261,7 @@ th[data-tooltip]{position:sticky;top:0;}
   <div class="tbl-scroll" style="max-height:520px;" id="sched-table-wrap"></div>
   <div class="section-title" style="margin-top:24px;">입고 대기 현황</div>
   <div id="sched-pending-wrap"></div>
+  <div class="card" id="card-supply-gap" style="margin-top:24px;"></div>
 </div>
 
 <script>
@@ -386,55 +383,26 @@ function renderOverview(){
   document.getElementById('card-weekly-change').innerHTML=wcHtml;
 
   // ── 채널별 결품 위험 카드 ──
-  let crHtml='<div class="card-title">채널별 결품 위험 <span>B2B Top SKU 기준</span></div>';
-  crHtml+='<table><tr><th style="text-align:left">채널</th><th style="text-align:center">SKU수</th><th style="text-align:center">결품위험</th><th style="text-align:left">위험 제품</th></tr>';
+  let crHtml='<div class="card-title">채널별 긴급부족 + 부족위험 <span>B2B Top SKU 기준 — 긴급부족(소진일≤L/T×0.5) + 부족위험(소진일≤L/T)</span></div>';
+  crHtml+='<table><tr><th style="text-align:left">채널</th><th style="text-align:center">Top SKU</th><th style="text-align:center">긴급부족</th><th style="text-align:center">부족위험</th><th style="text-align:left">위험 제품 (상위 5개)</th></tr>';
   for(const[ch,d]of Object.entries(D.channels)){
-    const riskCnt=d.risk_skus||0;
-    const riskBadge=riskCnt>=3?'<span style="color:#CC0000;font-weight:700;">'+riskCnt+'개</span>':riskCnt>0?'<span style="color:#e84545;font-weight:600;">'+riskCnt+'개</span>':'<span style="color:var(--green);">0개</span>';
-    const riskNames=(d.risk_sku_list||[]).map(s=>'<span style="font-size:11px;" title="'+s.code+' / 소진일 '+(s.days_left!=null?s.days_left+'일':'-')+'">'+((s.name||'').substring(0,15))+'</span>').join(', ');
+    const critCnt=d.alerts?.critical||0;
+    const warnCnt=d.alerts?.warning||0;
+    const critBadge=critCnt>0?'<span style="color:#CC0000;font-weight:700;">'+critCnt+'개</span>':'<span style="color:var(--green);">0</span>';
+    const warnBadge=warnCnt>0?'<span style="color:#e84545;font-weight:600;">'+warnCnt+'개</span>':'<span style="color:var(--green);">0</span>';
+    const riskNames=(d.risk_sku_list||[]).map(s=>{
+      const lvlColor=s.level==='critical'?'#CC0000':'#e84545';
+      return '<span style="font-size:11px;color:'+lvlColor+';" title="'+s.code+' / 소진일 '+(s.days_left!=null?s.days_left+'일':'-')+'">'+((s.name||'').substring(0,18))+'</span>';
+    }).join(', ');
     crHtml+=`<tr><td style="text-align:left"><span class="ch-tag ${OVS.has(ch)?'overseas':''}">${ch}</span></td>
       <td style="text-align:center">${d.sku_count}개</td>
-      <td style="text-align:center">${riskBadge}</td>
-      <td style="text-align:left;font-size:11px;color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${riskNames||'-'}</td></tr>`;
+      <td style="text-align:center">${critBadge}</td>
+      <td style="text-align:center">${warnBadge}</td>
+      <td style="text-align:left;font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${riskNames||'<span style="color:var(--green)">없음</span>'}</td></tr>`;
   }
   crHtml+='</table>';
   document.getElementById('card-channel-risk').innerHTML=crHtml;
 
-  // ── 입고 vs 판매계획 Gap 카드 ──
-  const sg=D.supply_gap;
-  let sgHtml='<div class="card-title">입고 vs 판매계획 Gap (3개월) <span>S95/S90 기준 — 현재고 + 3개월입고 - 3개월FCST</span></div>';
-  if(sg){
-    const sm=sg.summary;
-    sgHtml+=`<div style="display:flex;gap:16px;margin-bottom:16px;">
-      <div style="background:#ffeaea;border-radius:8px;padding:10px 18px;"><span style="color:#CC0000;font-weight:700;font-size:18px;">${sm.shortage_count}</span><span style="color:#CC0000;font-size:12px;margin-left:4px;">부족</span></div>
-      <div style="background:#fff0f0;border-radius:8px;padding:10px 18px;"><span style="color:#b8860b;font-weight:700;font-size:18px;">${sm.tight_count}</span><span style="color:#b8860b;font-size:12px;margin-left:4px;">주의</span></div>
-      <div style="background:#e8f5e9;border-radius:8px;padding:10px 18px;"><span style="color:#2d8a4e;font-weight:700;font-size:18px;">${sm.ok_count}</span><span style="color:#2d8a4e;font-size:12px;margin-left:4px;">정상</span></div>
-      <div style="background:var(--surface2);border-radius:8px;padding:10px 18px;"><span style="font-weight:600;font-size:14px;">${fmt(sm.total_gap)}</span><span style="color:var(--muted);font-size:12px;margin-left:4px;">총 Gap</span></div>
-    </div>`;
-    const top10=sg.items.slice(0,10);
-    if(top10.length){
-      sgHtml+='<div class="tbl-scroll" style="max-height:360px;"><table><tr><th style="text-align:center">티어</th><th>코드</th><th>제품명</th><th>현재고</th><th>3개월FCST</th><th>3개월입고</th><th>Gap</th><th style="text-align:center">상태</th></tr>';
-      top10.forEach(g=>{
-        const tierBg=g.tier==='S95'?'background:#ffeaea;color:#CC0000':'background:#fff3e0;color:#b8860b';
-        const gapColor=g.gap<0?'color:var(--red);font-weight:700':g.gap_status==='tight'?'color:var(--orange);font-weight:600':'';
-        const statusCls=g.gap_status==='shortage'?'b-critical':g.gap_status==='tight'?'b-warning':'b-normal';
-        const statusLabel=g.gap_status==='shortage'?'부족':g.gap_status==='tight'?'주의':'정상';
-        sgHtml+=`<tr>
-          <td style="text-align:center"><span class="badge" style="${tierBg}">${g.tier}</span></td>
-          <td style="font-size:11px;font-family:monospace">${g.code}</td>
-          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name||''}</td>
-          <td>${fmt(g.current_stock)}</td>
-          <td>${fmt(g.fcst_3m)}</td>
-          <td>${fmt(g.incoming_3m)}</td>
-          <td style="${gapColor}">${fmt(g.gap)}</td>
-          <td style="text-align:center"><span class="badge ${statusCls}">${statusLabel}</span></td></tr>`;
-      });
-      sgHtml+='</table></div>';
-    }
-  } else {
-    sgHtml+='<div style="color:var(--muted);font-size:13px;">데이터 없음</div>';
-  }
-  document.getElementById('card-supply-gap').innerHTML=sgHtml;
 }
 
 // ═══ SKU 관리 (통합) ═══
@@ -677,6 +645,7 @@ function renderSchedule(){
 
   filterScheduleTable();
   renderPendingOrders();
+  renderSupplyGap();
 }
 
 function setSchedTier(t,el){
@@ -754,6 +723,41 @@ function renderPendingOrders(){
     h+='</table></div>';
   }
   document.getElementById('sched-pending-wrap').innerHTML=h;
+}
+
+function renderSupplyGap(){
+  const sg=D.supply_gap;
+  let sgHtml='<div class="card-title">입고 vs 판매계획 Gap (3개월) <span>S95/S90 기준 — 현재고 + 3개월입고 - 3개월FCST</span></div>';
+  if(sg){
+    const sm=sg.summary;
+    sgHtml+=`<div style="display:flex;gap:16px;margin-bottom:16px;">
+      <div style="background:#ffeaea;border-radius:8px;padding:10px 18px;"><span style="color:#CC0000;font-weight:700;font-size:18px;">${sm.shortage_count}</span><span style="color:#CC0000;font-size:12px;margin-left:4px;">부족</span></div>
+      <div style="background:#fff0f0;border-radius:8px;padding:10px 18px;"><span style="color:#b8860b;font-weight:700;font-size:18px;">${sm.tight_count}</span><span style="color:#b8860b;font-size:12px;margin-left:4px;">주의</span></div>
+      <div style="background:#e8f5e9;border-radius:8px;padding:10px 18px;"><span style="color:#2d8a4e;font-weight:700;font-size:18px;">${sm.ok_count}</span><span style="color:#2d8a4e;font-size:12px;margin-left:4px;">정상</span></div>
+      <div style="background:var(--surface2);border-radius:8px;padding:10px 18px;"><span style="font-weight:600;font-size:14px;">${fmt(sm.total_gap)}</span><span style="color:var(--muted);font-size:12px;margin-left:4px;">총 Gap</span></div>
+    </div>`;
+    const top10=sg.items.slice(0,10);
+    if(top10.length){
+      sgHtml+='<div class="tbl-scroll" style="max-height:360px;"><table><tr><th style="text-align:center">티어</th><th>코드</th><th>제품명</th><th>현재고</th><th>3개월FCST</th><th>3개월입고</th><th>Gap</th><th style="text-align:center">상태</th></tr>';
+      top10.forEach(g=>{
+        const tierBg=g.tier==='S95'?'background:#ffeaea;color:#CC0000':'background:#fff3e0;color:#b8860b';
+        const gapColor=g.gap<0?'color:var(--red);font-weight:700':g.gap_status==='tight'?'color:var(--orange);font-weight:600':'';
+        const statusCls=g.gap_status==='shortage'?'b-critical':g.gap_status==='tight'?'b-warning':'b-normal';
+        const statusLabel=g.gap_status==='shortage'?'부족':g.gap_status==='tight'?'주의':'정상';
+        sgHtml+=`<tr>
+          <td style="text-align:center"><span class="badge" style="${tierBg}">${g.tier}</span></td>
+          <td style="font-size:11px;font-family:monospace">${g.code}</td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name||''}</td>
+          <td>${fmt(g.current_stock)}</td><td>${fmt(g.fcst_3m)}</td><td>${fmt(g.incoming_3m)}</td>
+          <td style="${gapColor}">${fmt(g.gap)}</td>
+          <td style="text-align:center"><span class="badge ${statusCls}">${statusLabel}</span></td></tr>`;
+      });
+      sgHtml+='</table></div>';
+    }
+  } else {
+    sgHtml+='<div style="color:var(--muted);font-size:13px;">데이터 없음</div>';
+  }
+  document.getElementById('card-supply-gap').innerHTML=sgHtml;
 }
 
 // ═══ init ═══
