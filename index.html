@@ -108,15 +108,19 @@ th[data-tooltip]{position:sticky;top:0;}
 <!-- ═══ 전체 현황 ═══ -->
 <div class="page active" id="pg-overview">
   <div class="kpi-grid" id="kpi-overview"></div>
-  <div class="card" id="card-weekly-change" style="margin-bottom:16px;"></div>
   <div class="grid-2">
     <div class="card">
-      <div class="card-title">재고 알람 분포</div>
-      <div class="donut-wrap"><canvas id="chart-donut"></canvas>
-        <div class="donut-center"><div class="num" id="donut-total"></div><div class="lbl">활성 SKU</div></div>
+      <div class="card-title">재고 알람 분포 + 주간 변화</div>
+      <div style="display:flex;gap:24px;align-items:flex-start;">
+        <div style="flex:0 0 200px;">
+          <div class="donut-wrap"><canvas id="chart-donut"></canvas>
+            <div class="donut-center"><div class="num" id="donut-total"></div><div class="lbl">활성 SKU</div></div>
+          </div>
+        </div>
+        <div style="flex:1;" id="card-weekly-change"></div>
       </div>
-      <div class="legend" id="alert-legend"></div>
-      <div id="alert-criteria" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.8;"></div>
+      <div class="legend" id="alert-legend" style="margin-top:12px;"></div>
+      <div id="alert-criteria" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.8;"></div>
     </div>
     <div class="card">
       <div class="card-title">라인별 재고 현황 Top 15 <span>SKU 알람 분포</span></div>
@@ -349,37 +353,35 @@ function renderOverview(){
     options:{responsive:true,maintainAspectRatio:false,scales:{y:{min:70,max:102,grid:{color:'#e0e0e0'},ticks:{callback:v=>v+'%'}},x:{grid:{display:false}}},
       plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.raw+'%'}},annotation:{annotations:fcstAnnotations}}}});
 
-  // ── 주간 변화 카드 ──
+  // ── 주간 변화 (도넛 옆) ──
   const wc=D.weekly_change;
-  let wcHtml='<div class="card-title">주간 변화 추적 <span>이전 업데이트 대비</span></div>';
-  if(wc&&wc.previous&&wc.delta){
-    const items=[
-      {key:'critical',label:'긴급부족',color:'var(--red)'},
-      {key:'warning',label:'부족위험',color:'var(--red-light)'},
-      {key:'caution',label:'주의',color:'#d06060'},
-      {key:'normal',label:'정상',color:'var(--green)'},
-      {key:'surplus',label:'여유',color:'var(--blue)'},
-      {key:'excess',label:'과잉',color:'var(--purple)'},
-      {key:'slow',label:'부진',color:'#9c6dcc'},
-    ];
-    wcHtml+='<div style="display:flex;flex-wrap:wrap;gap:12px;">';
-    items.forEach(it=>{
-      const cur=wc.current[it.key]||0;
-      const d=wc.delta[it.key]||0;
-      let arrow='',dColor='var(--muted)';
-      if(d>0){arrow='+'+d+' ↑';dColor='var(--red)';}
-      else if(d<0){arrow=d+' ↓';dColor='var(--green)';}
-      else{arrow='±0';dColor='var(--muted)';}
-      wcHtml+=`<div style="background:var(--surface2);border-radius:8px;padding:10px 14px;min-width:100px;">
-        <div style="font-size:11px;color:${it.color};font-weight:600;">${it.label}</div>
-        <div style="font-size:20px;font-weight:700;margin:2px 0;">${fmt(cur)}개</div>
-        <div style="font-size:12px;color:${dColor};font-weight:600;">${arrow}</div>
-      </div>`;
-    });
-    wcHtml+='</div>';
-  } else {
-    wcHtml+='<div style="color:var(--muted);font-size:13px;padding:16px 0;">이전 데이터 없음 (첫 실행)</div>';
-  }
+  const a=D.summary.alerts;
+  const wcItems=[
+    {key:'critical',label:'긴급부족',color:'#CC0000',bg:'#ffeaea'},
+    {key:'warning',label:'부족위험',color:'#e84545',bg:'#fff0f0'},
+    {key:'caution',label:'주의',color:'#d06060',bg:'#fff5f0'},
+    {key:'normal',label:'정상',color:'#2d8a4e',bg:'#e8f5e9'},
+    {key:'surplus',label:'여유',color:'#156082',bg:'#e3f2fd'},
+    {key:'excess',label:'과잉',color:'#7c4dbc',bg:'#f3e8ff'},
+    {key:'slow',label:'부진',color:'#9c6dcc',bg:'#f5f0ff'},
+  ];
+  let wcHtml='<table style="width:100%;border-collapse:collapse;">';
+  wcHtml+='<tr><th style="text-align:left;font-size:11px;padding:4px 8px;">상태</th><th style="text-align:right;font-size:11px;padding:4px 8px;">SKU</th><th style="text-align:right;font-size:11px;padding:4px 8px;">변화</th></tr>';
+  wcItems.forEach(it=>{
+    const cur=a[it.key]||0;
+    const d=(wc&&wc.delta)?wc.delta[it.key]||0:null;
+    let deltaHtml='';
+    if(d===null){deltaHtml='<span style="color:var(--muted);font-size:11px;">-</span>';}
+    else if(d>0){deltaHtml=`<span style="color:var(--red);font-weight:700;font-size:12px;">+${d} ↑</span>`;}
+    else if(d<0){deltaHtml=`<span style="color:var(--green);font-weight:700;font-size:12px;">${d} ↓</span>`;}
+    else{deltaHtml='<span style="color:var(--muted);font-size:11px;">±0</span>';}
+    wcHtml+=`<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:6px 8px;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${it.color};margin-right:6px;vertical-align:middle;"></span><span style="font-size:12px;font-weight:600;color:${it.color};">${it.label}</span></td>
+      <td style="text-align:right;padding:6px 8px;font-size:15px;font-weight:700;">${cur}</td>
+      <td style="text-align:right;padding:6px 8px;">${deltaHtml}</td>
+    </tr>`;
+  });
+  wcHtml+='</table>';
   document.getElementById('card-weekly-change').innerHTML=wcHtml;
 
   // ── 채널별 결품 위험 카드 ──
