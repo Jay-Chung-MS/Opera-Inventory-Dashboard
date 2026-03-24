@@ -654,6 +654,80 @@ order_needed_count = sum(1 for x in schedule_items if '발주필요' in x.get('o
 wb_sop.close()
 print(f"  총 {len(schedule_items)}개 제품, 입고대기 {len(pending_orders)}건 ({sum(x['qty'] for x in pending_orders):,}개)")
 
+# ── 이전 데이터 읽기 (주간 변화 추적) ──
+prev_alerts = {}
+prev_schedule = {}
+try:
+    with open(OUTPUT_JSON, encoding='utf-8') as f:
+        prev_data = json.load(f)
+    prev_alerts = prev_data.get('summary', {}).get('alerts', {})
+    prev_schedule = prev_data.get('schedule', {}).get('summary', {})
+    print(f"  이전 데이터 로드 완료: 긴급 {prev_alerts.get('critical', '?')}개")
+except Exception as ex:
+    print(f"  이전 데이터 없음 (첫 실행): {ex}")
+
+# ── 입고 vs 판매계획 Gap (향후 3개월) ──
+print("[5-c] 입고 vs 판매계획 Gap 분석...")
+gap_items = []
+for si in schedule_items:
+    code = si['code']
+    tier = si['tier']
+    current_stock = si['stock']
+
+    # fcst_3m: plan_by_sku에서 26-03, 26-04, 26-05 합산
+    plan = plan_by_sku.get(code, {})
+    fcst_3m = round(safe_float(plan.get('26-03', 0)) + safe_float(plan.get('26-04', 0)) + safe_float(plan.get('26-05', 0)))
+
+    # fcst가 0이면 alerts에서 forecast 기반으로 대체
+    if fcst_3m == 0:
+        entry = next((e for e in alert_list if e['code'] == code), None)
+        if entry and entry['forecast'] > 0:
+            fcst_3m = round(entry['forecast'] * 3)
+
+    if fcst_3m == 0:
+        continue
+
+    # incoming_3m: schedule에서 3월상~5월하 incoming 합산
+    incoming_3m = 0
+    target_periods = {'3월상', '3월하', '4월상', '4월하', '5월상', '5월하'}
+    for s in si.get('schedule', []):
+        if s['period'] in target_periods and s['incoming'] > 0:
+            incoming_3m += s['incoming']
+
+    gap = current_stock + incoming_3m - fcst_3m
+    if gap < 0:
+        gap_status = 'shortage'
+    elif gap < fcst_3m * 0.3:
+        gap_status = 'tight'
+    else:
+        gap_status = 'ok'
+
+    name = si['name']
+    gap_items.append({
+        'code': code,
+        'name': name,
+        'tier': tier,
+        'current_stock': current_stock,
+        'fcst_3m': fcst_3m,
+        'incoming_3m': incoming_3m,
+        'gap': gap,
+        'gap_status': gap_status,
+    })
+
+gap_items.sort(key=lambda x: x['gap'])
+shortage_count = sum(1 for g in gap_items if g['gap_status'] == 'shortage')
+tight_count = sum(1 for g in gap_items if g['gap_status'] == 'tight')
+ok_count = sum(1 for g in gap_items if g['gap_status'] == 'ok')
+total_gap = sum(g['gap'] for g in gap_items)
+print(f"  Gap 분석: {len(gap_items)}개 제품 / 부족 {shortage_count} / 주의 {tight_count} / 정상 {ok_count}")
+
+# ── 채널별 결품 위험 SKU 수 ──
+for ch_name, ch_data in channel_summary.items():
+    risk_skus = [s for s in ch_data['skus'] if s['level'] in ('critical', 'warning')]
+    risk_skus.sort(key=lambda x: (x['days_left'] if x['days_left'] is not None else 9999))
+    ch_data['risk_skus'] = len(risk_skus)
+    ch_data['risk_sku_list'] = [{'code': s['code'], 'name': s['name'], 'level': s['level'], 'days_left': s['days_left']} for s in risk_skus[:5]]
+
 # ── JSON 출력 ──
 total_active = sum(1 for e in alert_list if e['level'] != 'none')
 
@@ -698,6 +772,24 @@ output = {
             'pending_orders_qty': sum(x['qty'] for x in pending_orders),
         }
     },
+}
+
+# ── supply_gap 추가 ──
+output['supply_gap'] = {
+    'items': gap_items,
+    'summary': {
+        'shortage_count': shortage_count,
+        'tight_count': tight_count,
+        'ok_count': ok_count,
+        'total_gap': total_gap,
+    }
+}
+
+# ── 주간 변화 추적 추가 ──
+output['weekly_change'] = {
+    'current': alert_counts,
+    'previous': prev_alerts if prev_alerts else None,
+    'delta': {k: alert_counts.get(k, 0) - prev_alerts.get(k, 0) for k in alert_counts} if prev_alerts else None,
 }
 
 # ── 매출 데이터 연결 (Sales Dashboard data.json) ──

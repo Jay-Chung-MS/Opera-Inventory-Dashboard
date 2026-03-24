@@ -139,6 +139,12 @@ th[data-tooltip]{position:sticky;top:0;}
       <div style="height:260px"><canvas id="chart-fcst-trend"></canvas></div>
     </div>
   </div>
+  <!-- 주간 변화 + 입고 vs FCST Gap -->
+  <div class="grid-2">
+    <div class="card" id="card-weekly-change"></div>
+    <div class="card" id="card-channel-risk"></div>
+  </div>
+  <div class="card" id="card-supply-gap" style="margin-bottom:16px;"></div>
 </div>
 
 <!-- ═══ SKU 관리 (알람 + 채널 + 360° 통합) ═══ -->
@@ -345,6 +351,90 @@ function renderOverview(){
     data:{labels:fc.map(f=>f.month),datasets:[{label:'정확도',data:fc.map(f=>f.accuracy),borderColor:'#0F9ED5',backgroundColor:'rgba(15,158,213,0.08)',fill:true,tension:.3,pointRadius:4}]},
     options:{responsive:true,maintainAspectRatio:false,scales:{y:{min:70,max:102,grid:{color:'#e0e0e0'},ticks:{callback:v=>v+'%'}},x:{grid:{display:false}}},
       plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.raw+'%'}},annotation:{annotations:fcstAnnotations}}}});
+
+  // ── 주간 변화 카드 ──
+  const wc=D.weekly_change;
+  let wcHtml='<div class="card-title">주간 변화 추적 <span>이전 업데이트 대비</span></div>';
+  if(wc&&wc.previous&&wc.delta){
+    const items=[
+      {key:'critical',label:'긴급부족',color:'var(--red)'},
+      {key:'warning',label:'부족위험',color:'var(--red-light)'},
+      {key:'caution',label:'주의',color:'#d06060'},
+      {key:'normal',label:'정상',color:'var(--green)'},
+      {key:'surplus',label:'여유',color:'var(--blue)'},
+      {key:'excess',label:'과잉',color:'var(--purple)'},
+      {key:'slow',label:'부진',color:'#9c6dcc'},
+    ];
+    wcHtml+='<div style="display:flex;flex-wrap:wrap;gap:12px;">';
+    items.forEach(it=>{
+      const cur=wc.current[it.key]||0;
+      const d=wc.delta[it.key]||0;
+      let arrow='',dColor='var(--muted)';
+      if(d>0){arrow='+'+d+' ↑';dColor='var(--red)';}
+      else if(d<0){arrow=d+' ↓';dColor='var(--green)';}
+      else{arrow='±0';dColor='var(--muted)';}
+      wcHtml+=`<div style="background:var(--surface2);border-radius:8px;padding:10px 14px;min-width:100px;">
+        <div style="font-size:11px;color:${it.color};font-weight:600;">${it.label}</div>
+        <div style="font-size:20px;font-weight:700;margin:2px 0;">${fmt(cur)}개</div>
+        <div style="font-size:12px;color:${dColor};font-weight:600;">${arrow}</div>
+      </div>`;
+    });
+    wcHtml+='</div>';
+  } else {
+    wcHtml+='<div style="color:var(--muted);font-size:13px;padding:16px 0;">이전 데이터 없음 (첫 실행)</div>';
+  }
+  document.getElementById('card-weekly-change').innerHTML=wcHtml;
+
+  // ── 채널별 결품 위험 카드 ──
+  let crHtml='<div class="card-title">채널별 결품 위험 <span>B2B Top SKU 기준</span></div>';
+  crHtml+='<table><tr><th style="text-align:left">채널</th><th style="text-align:center">SKU수</th><th style="text-align:center">결품위험</th><th style="text-align:left">위험 제품</th></tr>';
+  for(const[ch,d]of Object.entries(D.channels)){
+    const riskCnt=d.risk_skus||0;
+    const riskBadge=riskCnt>=3?'<span style="color:#CC0000;font-weight:700;">'+riskCnt+'개</span>':riskCnt>0?'<span style="color:#e84545;font-weight:600;">'+riskCnt+'개</span>':'<span style="color:var(--green);">0개</span>';
+    const riskNames=(d.risk_sku_list||[]).map(s=>'<span style="font-size:11px;" title="'+s.code+' / 소진일 '+(s.days_left!=null?s.days_left+'일':'-')+'">'+((s.name||'').substring(0,15))+'</span>').join(', ');
+    crHtml+=`<tr><td style="text-align:left"><span class="ch-tag ${OVS.has(ch)?'overseas':''}">${ch}</span></td>
+      <td style="text-align:center">${d.sku_count}개</td>
+      <td style="text-align:center">${riskBadge}</td>
+      <td style="text-align:left;font-size:11px;color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${riskNames||'-'}</td></tr>`;
+  }
+  crHtml+='</table>';
+  document.getElementById('card-channel-risk').innerHTML=crHtml;
+
+  // ── 입고 vs 판매계획 Gap 카드 ──
+  const sg=D.supply_gap;
+  let sgHtml='<div class="card-title">입고 vs 판매계획 Gap (3개월) <span>S95/S90 기준 — 현재고 + 3개월입고 - 3개월FCST</span></div>';
+  if(sg){
+    const sm=sg.summary;
+    sgHtml+=`<div style="display:flex;gap:16px;margin-bottom:16px;">
+      <div style="background:#ffeaea;border-radius:8px;padding:10px 18px;"><span style="color:#CC0000;font-weight:700;font-size:18px;">${sm.shortage_count}</span><span style="color:#CC0000;font-size:12px;margin-left:4px;">부족</span></div>
+      <div style="background:#fff0f0;border-radius:8px;padding:10px 18px;"><span style="color:#b8860b;font-weight:700;font-size:18px;">${sm.tight_count}</span><span style="color:#b8860b;font-size:12px;margin-left:4px;">주의</span></div>
+      <div style="background:#e8f5e9;border-radius:8px;padding:10px 18px;"><span style="color:#2d8a4e;font-weight:700;font-size:18px;">${sm.ok_count}</span><span style="color:#2d8a4e;font-size:12px;margin-left:4px;">정상</span></div>
+      <div style="background:var(--surface2);border-radius:8px;padding:10px 18px;"><span style="font-weight:600;font-size:14px;">${fmt(sm.total_gap)}</span><span style="color:var(--muted);font-size:12px;margin-left:4px;">총 Gap</span></div>
+    </div>`;
+    const top10=sg.items.slice(0,10);
+    if(top10.length){
+      sgHtml+='<div class="tbl-scroll" style="max-height:360px;"><table><tr><th style="text-align:center">티어</th><th>코드</th><th>제품명</th><th>현재고</th><th>3개월FCST</th><th>3개월입고</th><th>Gap</th><th style="text-align:center">상태</th></tr>';
+      top10.forEach(g=>{
+        const tierBg=g.tier==='S95'?'background:#ffeaea;color:#CC0000':'background:#fff3e0;color:#b8860b';
+        const gapColor=g.gap<0?'color:var(--red);font-weight:700':g.gap_status==='tight'?'color:var(--orange);font-weight:600':'';
+        const statusCls=g.gap_status==='shortage'?'b-critical':g.gap_status==='tight'?'b-warning':'b-normal';
+        const statusLabel=g.gap_status==='shortage'?'부족':g.gap_status==='tight'?'주의':'정상';
+        sgHtml+=`<tr>
+          <td style="text-align:center"><span class="badge" style="${tierBg}">${g.tier}</span></td>
+          <td style="font-size:11px;font-family:monospace">${g.code}</td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name||''}</td>
+          <td>${fmt(g.current_stock)}</td>
+          <td>${fmt(g.fcst_3m)}</td>
+          <td>${fmt(g.incoming_3m)}</td>
+          <td style="${gapColor}">${fmt(g.gap)}</td>
+          <td style="text-align:center"><span class="badge ${statusCls}">${statusLabel}</span></td></tr>`;
+      });
+      sgHtml+='</table></div>';
+    }
+  } else {
+    sgHtml+='<div style="color:var(--muted);font-size:13px;">데이터 없음</div>';
+  }
+  document.getElementById('card-supply-gap').innerHTML=sgHtml;
 }
 
 // ═══ SKU 관리 (통합) ═══
