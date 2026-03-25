@@ -92,16 +92,61 @@ tr:hover td{background:#eaf4fb;}
 [data-tooltip]{position:relative;}
 th[data-tooltip]{position:sticky;top:0;}
 [data-tooltip]:hover::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;white-space:pre-line;z-index:200;max-width:300px;line-height:1.5;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,.15);}
+
+/* ═══ Task Management ═══ */
+.task-toolbar{display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap;}
+.task-toolbar .filter-btn.active{background:var(--surface2);color:var(--brand);border-color:var(--brand);}
+.btn-primary{padding:7px 16px;border-radius:6px;font-size:13px;cursor:pointer;color:#fff;background:var(--brand);border:none;font-weight:600;transition:opacity .15s;}
+.btn-primary:hover{opacity:.85;}
+.btn-sm{padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--muted);transition:all .15s;}
+.btn-sm:hover{color:var(--text);border-color:var(--muted);}
+.btn-sm.danger:hover{color:var(--red);border-color:var(--red);}
+
+.task-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:10px;transition:border-color .15s;}
+.task-card:hover{border-color:var(--muted);}
+.task-card.editing{border-color:var(--accent);}
+.task-header{display:flex;align-items:flex-start;gap:12px;}
+.task-title{font-size:14px;font-weight:600;flex:1;line-height:1.4;}
+.task-meta{display:flex;gap:10px;margin-top:8px;font-size:12px;color:var(--muted);flex-wrap:wrap;align-items:center;}
+.task-desc{font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6;white-space:pre-wrap;}
+.task-actions{display:flex;gap:6px;flex-shrink:0;}
+
+.priority-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle;}
+.p-high{background:var(--red);}
+.p-medium{background:var(--orange);}
+.p-low{background:var(--accent);}
+
+.status-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;}
+.s-todo{background:#f0f0f0;color:#666;}
+.s-progress{background:#e3f2fd;color:#0F9ED5;}
+.s-completed{background:#e8f5e9;color:#2d8a4e;}
+
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:500;display:flex;align-items:center;justify-content:center;}
+.modal{background:var(--surface);border-radius:12px;padding:24px;width:520px;max-width:90vw;max-height:85vh;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,.15);}
+.modal h3{font-size:16px;font-weight:700;margin-bottom:20px;}
+.form-group{margin-bottom:14px;}
+.form-group label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px;font-weight:500;}
+.form-input{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;outline:none;background:var(--surface);}
+.form-input:focus{border-color:var(--accent);}
+textarea.form-input{resize:vertical;min-height:80px;}
+select.form-input{cursor:pointer;}
+.form-row{display:flex;gap:12px;}
+.form-row .form-group{flex:1;}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border);}
+
+.task-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
+.task-empty{text-align:center;padding:60px 20px;color:var(--muted);font-size:14px;}
 </style>
 </head>
 <body>
 
 <nav class="nav">
   <div class="nav-logo">MEDIPEEL Inventory</div>
+  <div class="nav-tab" onclick="showPage('tasks',this)">태스크</div>
   <div class="nav-tab active" onclick="showPage('overview',this)">전체 현황</div>
   <div class="nav-tab" onclick="showPage('sku',this)">SKU 관리</div>
-  <div class="nav-tab" onclick="showPage('forecast',this)">수요예측</div>
   <div class="nav-tab" onclick="showPage('schedule',this)">발주 스케줄</div>
+  <div class="nav-tab" onclick="showPage('forecast',this)">수요예측</div>
   <div class="nav-right" id="updated"></div>
 </nav>
 
@@ -267,6 +312,30 @@ th[data-tooltip]{position:sticky;top:0;}
   <div id="sched-pending-wrap"></div>
   <div class="card" id="card-supply-gap" style="margin-top:24px;"></div>
 </div>
+
+<!-- ═══ 태스크 관리 ═══ -->
+<div class="page" id="pg-tasks">
+  <div class="task-stats" id="task-stats"></div>
+  <div class="task-toolbar">
+    <button class="btn-primary" onclick="openTaskModal()">+ 새 태스크</button>
+    <span class="filter-sep"></span>
+    <span style="font-size:11px;color:var(--muted);margin-right:2px;">상태:</span>
+    <div class="filter-btn active" onclick="setTaskFilter('status','all',this)">전체</div>
+    <div class="filter-btn" onclick="setTaskFilter('status','todo',this)">To Do</div>
+    <div class="filter-btn" onclick="setTaskFilter('status','progress',this)">In Progress</div>
+    <div class="filter-btn" onclick="setTaskFilter('status','completed',this)">Completed</div>
+    <span class="filter-sep">|</span>
+    <span style="font-size:11px;color:var(--muted);margin-right:2px;">우선순위:</span>
+    <div class="filter-btn active" onclick="setTaskFilter('priority','all',this)">전체</div>
+    <div class="filter-btn" onclick="setTaskFilter('priority','high',this)">High</div>
+    <div class="filter-btn" onclick="setTaskFilter('priority','medium',this)">Medium</div>
+    <div class="filter-btn" onclick="setTaskFilter('priority','low',this)">Low</div>
+    <span class="filter-sep">|</span>
+    <input class="search-box" id="task-search" placeholder="태스크 검색..." oninput="renderTasks()" style="width:200px;">
+  </div>
+  <div id="task-list"></div>
+</div>
+<div id="task-modal-root"></div>
 
 <script>
 let D=null, skuAlertFilter='all', skuChFilter='all';
@@ -761,11 +830,212 @@ function renderSupplyGap(){
   document.getElementById('card-supply-gap').innerHTML=sgHtml;
 }
 
+// ═══ 태스크 관리 ═══
+const TASK_KEY='opera_inv_tasks';
+let taskFilterStatus='all', taskFilterPriority='all';
+
+function loadTasks(){return JSON.parse(localStorage.getItem(TASK_KEY)||'[]');}
+function saveTasks(tasks){localStorage.setItem(TASK_KEY,JSON.stringify(tasks));}
+
+function setTaskFilter(type,val,el){
+  if(type==='status') taskFilterStatus=val;
+  else taskFilterPriority=val;
+  const parent=el.parentElement;
+  const sibs=[...parent.children].filter(c=>c.classList.contains('filter-btn'));
+  // find only the filter buttons in the same group
+  let group=[];
+  let inGroup=false;
+  const toolbar=el.closest('.task-toolbar');
+  for(const c of toolbar.children){
+    if(c.textContent.trim()===(type==='status'?'상태:':'우선순위:')) inGroup=true;
+    else if(c.classList.contains('filter-sep') && inGroup && group.length) break;
+    if(inGroup && c.classList.contains('filter-btn')) group.push(c);
+  }
+  group.forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  renderTasks();
+}
+
+function renderTaskStats(){
+  const tasks=loadTasks();
+  const todo=tasks.filter(t=>t.status==='todo').length;
+  const prog=tasks.filter(t=>t.status==='progress').length;
+  const done=tasks.filter(t=>t.status==='completed').length;
+  const overdue=tasks.filter(t=>t.status!=='completed'&&t.dueDate&&t.dueDate<new Date().toISOString().slice(0,10)).length;
+  document.getElementById('task-stats').innerHTML=`
+    <div class="kpi"><div class="kpi-label">전체 태스크</div><div class="kpi-val">${tasks.length}</div></div>
+    <div class="kpi"><div class="kpi-label" style="color:var(--accent)">In Progress</div><div class="kpi-val" style="color:var(--accent)">${prog}</div></div>
+    <div class="kpi"><div class="kpi-label" style="color:var(--green)">Completed</div><div class="kpi-val" style="color:var(--green)">${done}</div></div>
+    <div class="kpi"><div class="kpi-label" style="color:var(--red)">기한 초과</div><div class="kpi-val" style="color:var(--red)">${overdue}</div></div>`;
+}
+
+function renderTasks(){
+  renderTaskStats();
+  let tasks=loadTasks();
+  const q=(document.getElementById('task-search').value||'').toLowerCase();
+  if(taskFilterStatus!=='all') tasks=tasks.filter(t=>t.status===taskFilterStatus);
+  if(taskFilterPriority!=='all') tasks=tasks.filter(t=>t.priority===taskFilterPriority);
+  if(q) tasks=tasks.filter(t=>(t.title+' '+t.description).toLowerCase().includes(q));
+
+  // sort: incomplete first (high>medium>low), then completed at bottom
+  const pOrder={high:0,medium:1,low:2};
+  const sOrder={progress:0,todo:1,completed:2};
+  tasks.sort((a,b)=>sOrder[a.status]-sOrder[b.status] || pOrder[a.priority]-pOrder[b.priority] || (a.dueDate||'9').localeCompare(b.dueDate||'9'));
+
+  if(!tasks.length){
+    document.getElementById('task-list').innerHTML='<div class="task-empty">태스크가 없습니다. 새 태스크를 추가해보세요.</div>';
+    return;
+  }
+
+  const statusLabel={todo:'To Do',progress:'In Progress',completed:'Completed'};
+  const statusCls={todo:'s-todo',progress:'s-progress',completed:'s-completed'};
+  const priLabel={high:'High',medium:'Medium',low:'Low'};
+  const today=new Date().toISOString().slice(0,10);
+
+  document.getElementById('task-list').innerHTML=tasks.map(t=>{
+    const overdue=t.status!=='completed'&&t.dueDate&&t.dueDate<today;
+    return`<div class="task-card" data-id="${t.id}">
+      <div class="task-header">
+        <div style="flex:1;">
+          <div class="task-title" style="${t.status==='completed'?'text-decoration:line-through;color:var(--muted);':''}">${esc(t.title)}</div>
+          ${t.description?`<div class="task-desc">${esc(t.description)}</div>`:''}
+          <div class="task-meta">
+            <span class="status-tag ${statusCls[t.status]}">${statusLabel[t.status]}</span>
+            <span><span class="priority-dot p-${t.priority}"></span>${priLabel[t.priority]}</span>
+            ${t.startDate?`<span>Start: ${t.startDate}</span>`:''}
+            ${t.dueDate?`<span style="${overdue?'color:var(--red);font-weight:600':''}">Due: ${t.dueDate}${overdue?' (초과)':''}</span>`:''}
+            ${t.assignee?`<span>담당: ${esc(t.assignee)}</span>`:''}
+            <span style="color:#ccc">생성: ${t.createdAt.slice(0,10)}</span>
+          </div>
+        </div>
+        <div class="task-actions">
+          ${t.status!=='completed'?`<button class="btn-sm" onclick="cycleStatus('${t.id}')">${t.status==='todo'?'Start':'Complete'}</button>`:`<button class="btn-sm" onclick="cycleStatus('${t.id}')">Reopen</button>`}
+          <button class="btn-sm" onclick="openTaskModal('${t.id}')">Edit</button>
+          <button class="btn-sm danger" onclick="deleteTask('${t.id}')">Del</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+function cycleStatus(id){
+  const tasks=loadTasks();
+  const t=tasks.find(x=>x.id===id);
+  if(!t)return;
+  if(t.status==='todo') t.status='progress';
+  else if(t.status==='progress') t.status='completed';
+  else t.status='todo';
+  t.updatedAt=new Date().toISOString();
+  saveTasks(tasks);renderTasks();
+}
+
+function deleteTask(id){
+  if(!confirm('이 태스크를 삭제하시겠습니까?'))return;
+  const tasks=loadTasks().filter(t=>t.id!==id);
+  saveTasks(tasks);renderTasks();
+}
+
+function openTaskModal(editId){
+  const tasks=loadTasks();
+  const t=editId?tasks.find(x=>x.id===editId):null;
+  const isEdit=!!t;
+
+  document.getElementById('task-modal-root').innerHTML=`
+  <div class="modal-overlay" onclick="if(event.target===this)closeTaskModal()">
+    <div class="modal">
+      <h3>${isEdit?'태스크 수정':'새 태스크'}</h3>
+      <div class="form-group">
+        <label>제목 *</label>
+        <input class="form-input" id="tf-title" value="${isEdit?esc(t.title):''}" placeholder="태스크 제목">
+      </div>
+      <div class="form-group">
+        <label>설명</label>
+        <textarea class="form-input" id="tf-desc" placeholder="상세 내용 (선택)">${isEdit?esc(t.description):''}</textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>상태</label>
+          <select class="form-input" id="tf-status">
+            <option value="todo" ${isEdit&&t.status==='todo'?'selected':''}>To Do</option>
+            <option value="progress" ${isEdit&&t.status==='progress'?'selected':''}>In Progress</option>
+            <option value="completed" ${isEdit&&t.status==='completed'?'selected':''}>Completed</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>우선순위</label>
+          <select class="form-input" id="tf-priority">
+            <option value="high" ${isEdit&&t.priority==='high'?'selected':''}>High</option>
+            <option value="medium" ${(!isEdit)||(isEdit&&t.priority==='medium')?'selected':''}>Medium</option>
+            <option value="low" ${isEdit&&t.priority==='low'?'selected':''}>Low</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Start Date</label>
+          <input class="form-input" id="tf-start" type="date" value="${isEdit&&t.startDate?t.startDate:''}">
+        </div>
+        <div class="form-group">
+          <label>Due Date</label>
+          <input class="form-input" id="tf-due" type="date" value="${isEdit&&t.dueDate?t.dueDate:''}">
+        </div>
+        <div class="form-group">
+          <label>담당자</label>
+          <input class="form-input" id="tf-assignee" value="${isEdit&&t.assignee?esc(t.assignee):''}" placeholder="담당자명">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-sm" onclick="closeTaskModal()">취소</button>
+        <button class="btn-primary" onclick="saveTask('${editId||''}')">${isEdit?'저장':'추가'}</button>
+      </div>
+    </div>
+  </div>`;
+  document.getElementById('tf-title').focus();
+}
+
+function closeTaskModal(){document.getElementById('task-modal-root').innerHTML='';}
+
+function saveTask(editId){
+  const title=document.getElementById('tf-title').value.trim();
+  if(!title){alert('제목을 입력해주세요.');return;}
+  const tasks=loadTasks();
+  const now=new Date().toISOString();
+  if(editId){
+    const t=tasks.find(x=>x.id===editId);
+    if(t){
+      t.title=title;
+      t.description=document.getElementById('tf-desc').value.trim();
+      t.status=document.getElementById('tf-status').value;
+      t.priority=document.getElementById('tf-priority').value;
+      t.startDate=document.getElementById('tf-start').value||null;
+      t.dueDate=document.getElementById('tf-due').value||null;
+      t.assignee=document.getElementById('tf-assignee').value.trim()||null;
+      t.updatedAt=now;
+    }
+  } else {
+    tasks.push({
+      id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+      title,
+      description:document.getElementById('tf-desc').value.trim(),
+      status:document.getElementById('tf-status').value,
+      priority:document.getElementById('tf-priority').value,
+      startDate:document.getElementById('tf-start').value||null,
+      dueDate:document.getElementById('tf-due').value||null,
+      assignee:document.getElementById('tf-assignee').value.trim()||null,
+      createdAt:now,
+      updatedAt:now
+    });
+  }
+  saveTasks(tasks);closeTaskModal();renderTasks();
+}
+
 // ═══ init ═══
 async function init(){
   const r=await fetch('inventory_data.json');D=await r.json();
   document.getElementById('updated').textContent='Updated: '+D.updated;
-  renderOverview();renderSKU();renderFC();renderSchedule();
+  renderOverview();renderSKU();renderFC();renderSchedule();renderTasks();
 }
 init();
 </script>
