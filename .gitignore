@@ -1,1 +1,32 @@
+# === 환경/시스템 ===
+.env
+.env.*
+__pycache__/
+*.pyc
+.DS_Store
 desktop.ini
+~$*
+Thumbs.db
+
+# === 민감 데이터 ===
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+*.secret
+*.confidential.*
+confidential/
+
+# === Claude Code 내부 상태 ===
+.claude/ralph-state.json
+.claude/ralph-decision.txt
+.claude/settings.json
+.claude/settings.local.json
+
+# === 임시/빌드 ===
+*.log
+*.tmp
+node_modules/
+dist/
