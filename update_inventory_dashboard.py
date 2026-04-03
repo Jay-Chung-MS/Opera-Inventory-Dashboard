@@ -747,6 +747,8 @@ output = {
         'active_available': sum(e['available'] for e in alert_list),
         'b2b_top_count': len(b2b_codes),
         'alerts': alert_counts,
+        'avg_dio': 0,  # placeholder, updated after dio calc
+        'shortage_count': 0,  # placeholder, updated after procurement calc
     },
     'alerts': alert_list,
     'fcst': {
@@ -784,6 +786,177 @@ output['supply_gap'] = {
         'total_gap': total_gap,
     }
 }
+
+# ── DIO (Days Inventory Outstanding) ──
+print("[5-d] DIO 계산...")
+dio_items = []
+dio_sum_current = 0
+dio_sum_incoming = 0
+dio_count = 0
+for entry in alert_list:
+    code = entry['code']
+    if entry['level'] == 'none':
+        continue
+    inv = inv_agg.get(code, {})
+    current = int(inv.get('현재고', 0))
+    incoming_m = int(inv.get('입고예정', 0))
+    rec = entry['forecast']
+    daily = rec / 30 if rec > 0 else 0
+
+    if daily > 0:
+        dio_current = round(current / daily, 1)
+        dio_with_incoming = round((current + incoming_m) / daily, 1)
+    else:
+        dio_current = 9999
+        dio_with_incoming = 9999
+
+    dio_items.append({
+        'code': code,
+        'name': entry['name'],
+        'line': entry['line'],
+        'current_stock': current,
+        'incoming': incoming_m,
+        'monthly_demand': round(rec),
+        'dio_current': dio_current if dio_current < 9999 else None,
+        'dio_with_incoming': dio_with_incoming if dio_with_incoming < 9999 else None,
+        'level': entry['level'],
+    })
+    if dio_current < 9999:
+        dio_sum_current += dio_current
+        dio_sum_incoming += dio_with_incoming
+        dio_count += 1
+
+dio_items.sort(key=lambda x: (x['dio_current'] if x['dio_current'] is not None else 9999))
+avg_dio_current = round(dio_sum_current / dio_count, 1) if dio_count > 0 else 0
+avg_dio_incoming = round(dio_sum_incoming / dio_count, 1) if dio_count > 0 else 0
+
+# 정상 SKU만 평균 (과잉/부진 제외) + 중앙값
+normal_dios = [x['dio_current'] for x in dio_items
+               if x['dio_current'] is not None and x['level'] not in ('excess', 'slow', 'surplus')]
+avg_dio_normal = round(np.mean(normal_dios), 1) if normal_dios else 0
+median_dio = round(np.median(normal_dios), 1) if normal_dios else 0
+
+# DIO 구간 분포
+dio_buckets = {'0-30': 0, '31-60': 0, '61-90': 0, '91-120': 0, '120+': 0}
+for x in dio_items:
+    v = x['dio_current']
+    if v is None:
+        continue
+    if v <= 30: dio_buckets['0-30'] += 1
+    elif v <= 60: dio_buckets['31-60'] += 1
+    elif v <= 90: dio_buckets['61-90'] += 1
+    elif v <= 120: dio_buckets['91-120'] += 1
+    else: dio_buckets['120+'] += 1
+
+output['dio'] = {
+    'avg_current': avg_dio_current,
+    'avg_with_incoming': avg_dio_incoming,
+    'avg_normal': avg_dio_normal,
+    'median': median_dio,
+    'count': dio_count,
+    'normal_count': len(normal_dios),
+    'buckets': dio_buckets,
+    'items': dio_items,
+}
+print(f"  DIO: {dio_count}개 SKU, 전체평균 {avg_dio_current}일, 정상평균 {avg_dio_normal}일, 중앙값 {median_dio}일")
+
+# ── 부진재고 (Slow-moving) ──
+print("[5-e] 부진재고 분석...")
+slow_items = []
+slow_total_qty = 0
+for entry in alert_list:
+    if entry['level'] != 'slow':
+        continue
+    code = entry['code']
+    # 최종 출고월 계산
+    ship_data = ship_by_sku.get(code, {})
+    last_ship = None
+    for m in sorted(ship_data.keys(), reverse=True):
+        if ship_data[m] > 0:
+            last_ship = m
+            break
+    # 체류일수
+    if last_ship:
+        try:
+            last_y, last_m = last_ship.split('-')
+            from datetime import date
+            last_date = date(2000 + int(last_y), int(last_m), 28)
+            idle_days = (datetime.now().date() - last_date).days
+        except:
+            idle_days = None
+    else:
+        idle_days = None
+
+    slow_items.append({
+        'code': code,
+        'name': entry['name'],
+        'line': entry['line'],
+        'stock_qty': entry['available'],
+        'last_ship_month': last_ship,
+        'idle_days': idle_days,
+        'status': sku_map.get(code, {}).get('status', ''),
+    })
+    slow_total_qty += entry['available']
+
+slow_items.sort(key=lambda x: -(x['stock_qty'] or 0))
+
+output['slow_moving'] = {
+    'total_qty': slow_total_qty,
+    'total_count': len(slow_items),
+    'items': slow_items,
+}
+print(f"  부진재고: {len(slow_items)}개 SKU, 총 {slow_total_qty:,}EA")
+
+# ── 조달관리 (Procurement - Shortage) ──
+print("[5-f] 조달관리 데이터...")
+shortage_immediate = []
+shortage_monitor = []
+
+# 1) supply_gap 기반 (S95/S90)
+gap_codes = set()
+for g in gap_items:
+    if g['gap_status'] == 'shortage':
+        shortage_immediate.append(g)
+        gap_codes.add(g['code'])
+    elif g['gap_status'] == 'tight':
+        shortage_monitor.append(g)
+        gap_codes.add(g['code'])
+
+# 2) alert_list의 critical/warning 중 supply_gap에 없는 SKU도 추가
+for entry in alert_list:
+    if entry['code'] in gap_codes:
+        continue
+    if entry['level'] in ('critical', 'warning'):
+        fc = forecasts.get(entry['code'], {})
+        rec = fc.get('recommended', 0)
+        shortage_immediate.append({
+            'code': entry['code'],
+            'name': entry['name'],
+            'tier': '-',
+            'current_stock': entry['available'],
+            'fcst_3m': round(rec * 3) if rec > 0 else 0,
+            'incoming_3m': entry['incoming'],
+            'gap': entry['available'] + entry['incoming'] - round(rec * 3) if rec > 0 else 0,
+            'gap_status': 'shortage',
+        })
+
+shortage_immediate.sort(key=lambda x: x['gap'])
+
+output['procurement'] = {
+    'shortage_groups': {
+        'immediate': shortage_immediate,
+        'monitor': shortage_monitor,
+    },
+    'total_shortage_sku': len(shortage_immediate),
+    'total_monitor_sku': len(shortage_monitor),
+    'total_shortage_qty': abs(sum(g['gap'] for g in shortage_immediate if g['gap'] < 0)),
+}
+print(f"  조달: 즉시대응 {len(shortage_immediate)}개, 모니터링 {len(shortage_monitor)}개")
+
+# summary에 DIO/shortage 반영
+output['summary']['avg_dio'] = avg_dio_normal
+output['summary']['median_dio'] = median_dio
+output['summary']['shortage_count'] = len(shortage_immediate) + len(shortage_monitor)
 
 # ── 주간 변화 추적 추가 ──
 output['weekly_change'] = {

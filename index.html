@@ -27,7 +27,7 @@ body{background:var(--bg);color:var(--text);font-family:'Pretendard',sans-serif;
 .page{display:none;padding:24px;max-width:1400px;margin:0 auto;}
 .page.active{display:block;}
 
-.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px;}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;}
 .kpi-label{color:var(--muted);font-size:12px;margin-bottom:6px;}
 .kpi-val{font-size:26px;font-weight:700;line-height:1.1;}
@@ -134,6 +134,19 @@ select.form-input{cursor:pointer;}
 .form-row .form-group{flex:1;}
 .modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border);}
 
+/* ═══ DIO Gauge Bars ═══ */
+.dio-row{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:12px;}
+.dio-label{width:140px;color:var(--muted);text-align:right;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dio-gauge{flex:1;height:16px;background:var(--surface2);border-radius:3px;position:relative;overflow:hidden;}
+.dio-fill{height:100%;border-radius:3px;transition:width .3s;}
+.dio-marks{position:absolute;top:0;height:100%;display:flex;pointer-events:none;}
+.dio-mark{position:absolute;top:0;height:100%;border-left:2px dashed rgba(0,0,0,.2);}
+.dio-val{width:60px;font-variant-numeric:tabular-nums;flex-shrink:0;font-weight:600;}
+/* ═══ Procurement Plan ═══ */
+.proc-input{padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;font-family:inherit;width:100%;outline:none;}
+.proc-input:focus{border-color:var(--accent);}
+.proc-select{padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;cursor:pointer;background:var(--surface);}
+
 .task-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
 .task-empty{text-align:center;padding:60px 20px;color:var(--muted);font-size:14px;}
 </style>
@@ -145,7 +158,8 @@ select.form-input{cursor:pointer;}
   <div class="nav-tab" onclick="showPage('tasks',this)">태스크</div>
   <div class="nav-tab active" onclick="showPage('overview',this)">전체 현황</div>
   <div class="nav-tab" onclick="showPage('sku',this)">SKU 관리</div>
-  <div class="nav-tab" onclick="showPage('schedule',this)">발주 스케줄</div>
+  <div class="nav-tab" onclick="showPage('inventory',this)">재고 분석</div>
+  <div class="nav-tab" onclick="showPage('procurement',this)">조달 관리</div>
   <div class="nav-tab" onclick="showPage('forecast',this)">수요예측</div>
   <div class="nav-right" id="updated"></div>
 </nav>
@@ -288,29 +302,52 @@ select.form-input{cursor:pointer;}
   <div class="tbl-scroll" id="fc-table-wrap"></div>
 </div>
 
-<!-- ═══ 발주 스케줄 ═══ -->
-<div class="page" id="pg-schedule">
-  <div class="kpi-grid" id="kpi-schedule"></div>
+<!-- ═══ 재고 분석 ═══ -->
+<div class="page" id="pg-inventory">
+  <div class="kpi-grid" id="kpi-dio" style="grid-template-columns:repeat(4,1fr);"></div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">DIO 게이지 — 현재고 기준 <span>재고보유일수 (현재고 ÷ 일예측출고)</span></div>
+      <div id="dio-current-bars" style="max-height:500px;overflow-y:auto;"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">DIO 게이지 — 입고반영 기준 <span>(현재고 + 당월입고예정) ÷ 일예측출고</span></div>
+      <div id="dio-incoming-bars" style="max-height:500px;overflow-y:auto;"></div>
+    </div>
+  </div>
+  <div class="section-title">부진재고 현황 <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--purple);margin-left:8px;">출고 없는 SKU</span></div>
+  <div class="card">
+    <div style="display:flex;gap:16px;margin-bottom:16px;">
+      <div style="background:#f3e5f5;border-radius:8px;padding:10px 18px;"><span style="color:#6a3d8a;font-weight:700;font-size:18px;" id="slow-count">0</span><span style="color:#6a3d8a;font-size:12px;margin-left:4px;">부진 SKU</span></div>
+      <div style="background:#f3e5f5;border-radius:8px;padding:10px 18px;"><span style="color:#6a3d8a;font-weight:700;font-size:18px;" id="slow-qty">0</span><span style="color:#6a3d8a;font-size:12px;margin-left:4px;">총 재고수량</span></div>
+    </div>
+    <div class="tbl-scroll" style="max-height:400px;" id="slow-table-wrap"></div>
+  </div>
+</div>
+
+<!-- ═══ 조달 관리 ═══ -->
+<div class="page" id="pg-procurement">
+  <div class="kpi-grid" id="kpi-procurement" style="grid-template-columns:repeat(4,1fr);"></div>
+  <div class="info-box" style="padding:12px 16px;margin-bottom:16px;">
+    <span class="def">
+    쇼티지 판단: 현재고 + 3개월 입고예정 - 3개월 예측수요. &nbsp;
+    <span style="color:#CC0000;font-weight:600;">즉시 대응</span> = Gap 음수(부족) &nbsp;
+    <span style="color:#b8860b;font-weight:600;">주간 모니터링</span> = Gap 양수지만 예측의 30% 미만(주의)
+    </span>
+  </div>
+  <div class="section-title" style="margin-top:0;">즉시 대응 <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--red);margin-left:8px;">부족 — 입고계획 필요</span></div>
   <div class="card" style="margin-bottom:16px;">
-    <div class="card-title">입고/출고 스케줄 타임라인 <span>S95+S90 합산 (상/하반월)</span></div>
-    <div style="height:340px"><canvas id="chart-schedule-timeline"></canvas></div>
+    <div class="tbl-scroll" style="max-height:400px;" id="proc-immediate-wrap"></div>
   </div>
-  <div class="section-title">S95/S90 제품 현황</div>
-  <div class="filter-bar">
-    <span style="font-size:11px;color:var(--muted);margin-right:4px;">등급:</span>
-    <div class="filter-btn active" onclick="setSchedTier('all',this)">전체</div>
-    <div class="filter-btn" onclick="setSchedTier('S95',this)">S95</div>
-    <div class="filter-btn" onclick="setSchedTier('S90',this)">S90</div>
-    <span class="filter-sep">|</span>
-    <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;">
-      <input type="checkbox" id="sched-order-only" onchange="filterScheduleTable()"> 발주필요만
-    </label>
-    <span style="font-size:12px;color:var(--muted);" id="sched-count"></span>
+  <div class="section-title">주간 모니터링 <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--orange);margin-left:8px;">주의 — 지속 관찰</span></div>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="tbl-scroll" style="max-height:400px;" id="proc-monitor-wrap"></div>
   </div>
-  <div class="tbl-scroll" style="max-height:520px;" id="sched-table-wrap"></div>
-  <div class="section-title" style="margin-top:24px;">입고 대기 현황</div>
-  <div id="sched-pending-wrap"></div>
-  <div class="card" id="card-supply-gap" style="margin-top:24px;"></div>
+  <div class="section-title">입고계획 메모 <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--accent);margin-left:8px;">localStorage 저장 — 브라우저별 개인 메모</span></div>
+  <div class="card" id="proc-plan-card">
+    <div style="margin-bottom:12px;font-size:12px;color:var(--muted);">쇼티지 SKU에 대한 입고계획을 메모합니다. 데이터는 이 브라우저에만 저장됩니다.</div>
+    <div class="tbl-scroll" style="max-height:400px;" id="proc-plan-wrap"></div>
+  </div>
 </div>
 
 <!-- ═══ 태스크 관리 ═══ -->
@@ -338,10 +375,9 @@ select.form-input{cursor:pointer;}
 <div id="task-modal-root"></div>
 
 <script>
-let D=null, skuAlertFilter='all', skuChFilter='all';
-let schedTierFilter='all';
-let schedTimelineChart=null;
+let D=null, skuAlertFilter='all', skuChFilter='all', skuStatusFilter='all';
 let s360C1=null, s360C2=null;
+const PROC_PLAN_KEY='opera_proc_plans';
 
 const LEVELS={critical:'긴급부족',warning:'부족위험',caution:'주의',normal:'정상',surplus:'여유',excess:'과잉재고',slow:'부진재고',none:'-'};
 const LCOLORS={critical:'#CC0000',warning:'#e84545',caution:'#d06060',normal:'#2d8a4e',surplus:'#156082',excess:'#7c4dbc',slow:'#9c6dcc',none:'#ccc'};
@@ -368,7 +404,11 @@ function renderOverview(){
     <div class="kpi"><div class="kpi-label" style="color:var(--red)">긴급부족 + 부족위험</div><div class="kpi-val" style="color:var(--red)">${a.critical+a.warning}개</div>
       <div class="kpi-sub">긴급 ${a.critical} / 위험 ${a.warning} — 즉시 발주</div></div>
     <div class="kpi"><div class="kpi-label" style="color:var(--purple)">과잉 + 부진</div><div class="kpi-val" style="color:var(--purple)">${a.excess+a.slow}개</div>
-      <div class="kpi-sub">과잉(6개월+) ${a.excess} / 부진 ${a.slow}</div></div>`;
+      <div class="kpi-sub">과잉(6개월+) ${a.excess} / 부진 ${a.slow}</div></div>
+    <div class="kpi"><div class="kpi-label">평균 DIO (정상 SKU)</div><div class="kpi-val" style="color:var(--blue)">${s.avg_dio||0}일</div>
+      <div class="kpi-sub">중앙값 ${s.median_dio||0}일 / 과잉·부진 제외</div></div>
+    <div class="kpi" style="cursor:pointer" onclick="showPage('procurement',document.querySelectorAll('.nav-tab')[4])"><div class="kpi-label" style="color:var(--orange)">쇼티지</div><div class="kpi-val" style="color:var(--orange)">${s.shortage_count||0}개</div>
+      <div class="kpi-sub">부족+주의 SKU ▶ 조달관리</div></div>`;
 
   // 도넛
   document.getElementById('donut-total').textContent=s.active_sku;
@@ -492,7 +532,6 @@ function renderSKU(){
 
 function setSKUAlert(l,el){skuAlertFilter=l;document.querySelectorAll('#sku-alert-filters .filter-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');filterSKUTable();}
 function setSKUCh(c,el){skuChFilter=c;document.querySelectorAll('#sku-ch-filters .filter-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');filterSKUTable();}
-
 function filterSKUTable(){
   const q=(document.getElementById('sku-search').value||'').toLowerCase();
   const b2b=document.getElementById('sku-b2b').checked;
@@ -647,187 +686,186 @@ function filterFC(){
   h+='</table>';document.getElementById('fc-table-wrap').innerHTML=h;
 }
 
-// ═══ 발주 스케줄 ═══
-function renderSchedule(){
-  if(!D.schedule) return;
-  const sc=D.schedule, sm=sc.summary;
+// ═══ 재고 분석 ═══
+function renderInventoryAnalysis(){
+  if(!D.dio) return;
+  const dio=D.dio;
 
   // KPIs
-  document.getElementById('kpi-schedule').innerHTML=`
-    <div class="kpi"><div class="kpi-label">S95 관리 제품</div><div class="kpi-val">${fmt(sm.s95_count)}개</div>
-      <div class="kpi-sub">핵심 SKU</div></div>
-    <div class="kpi"><div class="kpi-label">S90 관리 제품</div><div class="kpi-val">${fmt(sm.s90_count)}개</div>
-      <div class="kpi-sub">주요 SKU</div></div>
-    <div class="kpi"><div class="kpi-label" style="color:var(--red)">발주 필요</div><div class="kpi-val" style="color:var(--red)">${fmt(sm.order_needed)}개</div>
-      <div class="kpi-sub">즉시 발주 검토</div></div>
-    <div class="kpi"><div class="kpi-label">입고 대기</div><div class="kpi-val">${fmt(sm.pending_orders_count)}건</div>
-      <div class="kpi-sub">${fmt(sm.pending_orders_qty)}개</div></div>`;
+  const bk=dio.buckets||{};
+  document.getElementById('kpi-dio').innerHTML=`
+    <div class="kpi"><div class="kpi-label">정상 SKU 평균 DIO</div><div class="kpi-val" style="color:var(--blue)">${dio.avg_normal||dio.avg_current}일</div>
+      <div class="kpi-sub">중앙값 ${dio.median||0}일 / ${dio.normal_count||dio.count}개 SKU</div></div>
+    <div class="kpi"><div class="kpi-label">DIO 30일 이하</div><div class="kpi-val" style="color:var(--red)">${bk['0-30']||0}개</div>
+      <div class="kpi-sub">빠른 소진 위험</div></div>
+    <div class="kpi"><div class="kpi-label" style="color:var(--purple)">부진재고</div><div class="kpi-val" style="color:var(--purple)">${D.slow_moving?D.slow_moving.total_count:0}개</div>
+      <div class="kpi-sub">${D.slow_moving?fmtEA(D.slow_moving.total_qty):0} EA</div></div>
+    <div class="kpi"><div class="kpi-label">DIO 분포</div><div class="kpi-val" style="font-size:14px;line-height:1.6;">
+      <span style="color:var(--red)">~30일 ${bk['0-30']||0}</span> · <span style="color:var(--orange)">~60 ${bk['31-60']||0}</span> · <span style="color:var(--green)">~90 ${bk['61-90']||0}</span><br>
+      <span style="color:var(--blue)">~120 ${bk['91-120']||0}</span> · <span style="color:var(--purple)">120+ ${bk['120+']||0}</span></div>
+      <div class="kpi-sub">구간별 SKU 수</div></div>`;
 
-  // Timeline chart: aggregate schedule across all items
-  const periods=['3월상','3월하','4월상','4월하','5월상','5월하','6월상','6월하','7월상','7월하','8월상','8월하'];
-  const aggIncoming=new Array(12).fill(0);
-  const aggOutgoing=new Array(12).fill(0);
-  const aggBalance=new Array(12).fill(0);
+  // DIO gauge bars (current)
+  renderDIOBars('dio-current-bars', dio.items, 'dio_current');
+  // DIO gauge bars (with incoming)
+  renderDIOBars('dio-incoming-bars', dio.items, 'dio_with_incoming');
 
-  sc.items.forEach(item=>{
-    if(item.schedule){
-      item.schedule.forEach((s,i)=>{
-        if(i<12){
-          aggIncoming[i]+=s.incoming||0;
-          aggOutgoing[i]+=s.outgoing||0;
-          aggBalance[i]+=s.balance||0;
-        }
-      });
-    }
-  });
-
-  // Cumulative balance
-  const cumBalance=[];
-  let cum=0;
-  aggBalance.forEach(b=>{cum+=b;cumBalance.push(cum);});
-
-  if(schedTimelineChart) schedTimelineChart.destroy();
-  schedTimelineChart=new Chart(document.getElementById('chart-schedule-timeline'),{
-    type:'bar',
-    data:{
-      labels:periods,
-      datasets:[
-        {label:'입고예정',data:aggIncoming,backgroundColor:'rgba(45,138,78,0.5)',borderColor:'#2d8a4e',borderWidth:1,order:2},
-        {label:'출고예정',data:aggOutgoing.map(v=>-v),backgroundColor:'rgba(204,0,0,0.35)',borderColor:'#CC0000',borderWidth:1,order:2},
-        {label:'누적 과부족',data:cumBalance,type:'line',borderColor:'#0F9ED5',backgroundColor:'rgba(15,158,213,0.08)',fill:true,tension:.3,pointRadius:4,pointBackgroundColor:'#0F9ED5',yAxisID:'y',order:1}
-      ]
-    },
-    options:{
-      responsive:true,maintainAspectRatio:false,
-      scales:{
-        x:{grid:{display:false},stacked:true},
-        y:{grid:{color:'#e0e0e0'},stacked:true,ticks:{callback:v=>fmtEA(v)}}
-      },
-      plugins:{
-        legend:{labels:{color:'#666',font:{size:11}}},
-        tooltip:{callbacks:{label:ctx=>{
-          const v=ctx.raw;
-          return ctx.dataset.label+': '+fmt(Math.abs(Math.round(v)))+' EA';
-        }}}
-      }
-    }
-  });
-
-  filterScheduleTable();
-  renderPendingOrders();
-  renderSupplyGap();
+  // Slow-moving table
+  if(D.slow_moving){
+    const sm=D.slow_moving;
+    document.getElementById('slow-count').textContent=fmt(sm.total_count);
+    document.getElementById('slow-qty').textContent=fmtEA(sm.total_qty);
+    let h=`<table><tr><th>#</th><th>품번</th><th>제품명</th><th>라인</th><th>가용재고</th><th>최종출고</th><th>체류일수</th><th>상태</th></tr>`;
+    sm.items.forEach((e,i)=>{
+      const idlColor=e.idle_days&&e.idle_days>180?'color:var(--red);font-weight:600':e.idle_days&&e.idle_days>90?'color:var(--orange)':'';
+      h+=`<tr><td>${i+1}</td>
+        <td style="font-size:11px;font-family:monospace">${e.code}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name||''}</td>
+        <td>${e.line||'-'}</td>
+        <td>${fmt(e.stock_qty)}</td>
+        <td>${e.last_ship_month||'없음'}</td>
+        <td style="${idlColor}">${e.idle_days!=null?fmt(e.idle_days)+'일':'-'}</td>
+        <td>${e.status||'-'}</td></tr>`;
+    });
+    h+='</table>';
+    document.getElementById('slow-table-wrap').innerHTML=h;
+  }
 }
 
-function setSchedTier(t,el){
-  schedTierFilter=t;
-  document.querySelectorAll('#pg-schedule .filter-btn').forEach(b=>b.classList.remove('active'));
-  el.classList.add('active');
-  filterScheduleTable();
-}
-
-function filterScheduleTable(){
-  if(!D.schedule) return;
-  let items=D.schedule.items.slice();
-  if(schedTierFilter!=='all') items=items.filter(x=>x.tier===schedTierFilter);
-  const orderOnly=document.getElementById('sched-order-only').checked;
-  if(orderOnly) items=items.filter(x=>x.order_needed&&x.order_needed.includes('발주필요'));
-
-  document.getElementById('sched-count').textContent=items.length+'개';
-
-  let h=`<table><tr>
-    <th style="text-align:center;width:50px">등급</th>
-    <th>제품코드</th><th>제품명</th>
-    <th>L/T</th><th>평균판매량</th><th>현재고</th><th>재고월수</th>
-    <th>안전재고</th><th>L/T후 재고일수</th><th>발주필요</th><th>발주량</th></tr>`;
-  items.forEach(e=>{
-    const tierBg=e.tier==='S95'?'background:#ffeaea;color:#CC0000':'background:#fff3e0;color:#b8860b';
-    const needColor=e.order_needed&&e.order_needed.includes('발주필요')?'color:var(--red);font-weight:600':'';
-    const daysColor=e.days_after_lt!==null&&e.days_after_lt<=0?'color:var(--red);font-weight:600':e.days_after_lt<30?'color:var(--orange);font-weight:600':'';
-    h+=`<tr>
-      <td style="text-align:center"><span class="badge" style="${tierBg}">${e.tier}</span></td>
-      <td style="font-size:11px;font-family:monospace">${e.code}</td>
-      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name||''}</td>
-      <td>${e.lt}일</td>
-      <td>${fmt(e.avg_sales)}</td>
-      <td>${fmt(e.stock)}</td>
-      <td>${e.stock_months}</td>
-      <td>${fmt(e.safety_stock)}</td>
-      <td style="${daysColor}">${e.days_after_lt}일</td>
-      <td style="${needColor}">${e.order_needed||'-'}</td>
-      <td>${e.order_qty?fmt(e.order_qty):'-'}</td></tr>`;
+function renderDIOBars(containerId, items, field){
+  // 과잉/부진 제외하고 정상 범위 SKU만 표시, MAX는 95th percentile 기반
+  const filtered=items.filter(x=>x[field]!==null&&x.level!=='slow').slice(0,60);
+  const vals=filtered.map(x=>x[field]).filter(v=>v<9999).sort((a,b)=>a-b);
+  const p95=vals.length>0?vals[Math.floor(vals.length*0.95)]:180;
+  const MAX_DIO=Math.max(Math.ceil(p95/30)*30, 90); // 최소 90일, 30일 단위 올림
+  let h='';
+  filtered.forEach(e=>{
+    const val=e[field];
+    const pct=Math.min(val/MAX_DIO*100,100);
+    let color;
+    if(val<=30) color='#CC0000';
+    else if(val<=60) color='#e84545';
+    else if(val<=90) color='#b8860b';
+    else if(val<=120) color='#2d8a4e';
+    else color='#7c4dbc';
+    h+=`<div class="dio-row">
+      <div class="dio-label" title="${e.code} ${e.name}">${(e.name||e.code).substring(0,18)}</div>
+      <div class="dio-gauge">
+        <div class="dio-fill" style="width:${pct}%;background:${color};"></div>
+        <div class="dio-mark" style="left:${30/MAX_DIO*100}%;" title="30일"></div>
+        <div class="dio-mark" style="left:${60/MAX_DIO*100}%;" title="60일"></div>
+        <div class="dio-mark" style="left:${90/MAX_DIO*100}%;" title="90일"></div>
+        <div class="dio-mark" style="left:${120/MAX_DIO*100}%;" title="120일"></div>
+      </div>
+      <div class="dio-val" style="color:${color}">${Math.round(val)}일</div>
+    </div>`;
   });
-  h+='</table>';
-  document.getElementById('sched-table-wrap').innerHTML=h;
+  document.getElementById(containerId).innerHTML=h||'<div style="color:var(--muted);font-size:13px">데이터 없음</div>';
 }
 
-function renderPendingOrders(){
-  if(!D.schedule) return;
-  const orders=D.schedule.pending_orders;
-  if(!orders||!orders.length){
-    document.getElementById('sched-pending-wrap').innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px;">입고 대기 건 없음</div>';
+// ═══ 조달 관리 ═══
+function renderProcurement(){
+  if(!D.procurement) return;
+  const pr=D.procurement;
+  const sg=D.supply_gap||{summary:{}};
+  const sgSm=sg.summary||{};
+
+  // KPIs
+  document.getElementById('kpi-procurement').innerHTML=`
+    <div class="kpi"><div class="kpi-label" style="color:var(--red)">즉시 대응</div><div class="kpi-val" style="color:var(--red)">${pr.total_shortage_sku}개</div>
+      <div class="kpi-sub">부족수량 ${fmtEA(pr.total_shortage_qty)} EA</div></div>
+    <div class="kpi"><div class="kpi-label" style="color:var(--orange)">주간 모니터링</div><div class="kpi-val" style="color:var(--orange)">${pr.total_monitor_sku}개</div>
+      <div class="kpi-sub">예측 30% 미만 여유</div></div>
+    <div class="kpi"><div class="kpi-label">입고 대기</div><div class="kpi-val">${D.schedule?fmt(D.schedule.summary.pending_orders_count):0}건</div>
+      <div class="kpi-sub">${D.schedule?fmtEA(D.schedule.summary.pending_orders_qty):0} EA</div></div>
+    <div class="kpi"><div class="kpi-label" style="color:var(--green)">정상</div><div class="kpi-val" style="color:var(--green)">${sgSm.ok_count||0}개</div>
+      <div class="kpi-sub">3개월 충분</div></div>`;
+
+  // Immediate table
+  renderProcTable('proc-immediate-wrap', pr.shortage_groups.immediate, 'shortage');
+  // Monitor table
+  renderProcTable('proc-monitor-wrap', pr.shortage_groups.monitor, 'tight');
+  // Plan input
+  renderProcPlan();
+}
+
+function renderProcTable(containerId, items, type){
+  if(!items||!items.length){
+    document.getElementById(containerId).innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px;">해당 항목 없음</div>';
     return;
   }
-
-  // Group by period
-  const grouped={};
-  orders.forEach(o=>{
-    const p=o.period||'미정';
-    if(!grouped[p]) grouped[p]=[];
-    grouped[p].push(o);
+  const statusCls=type==='shortage'?'b-critical':'b-warning';
+  const statusLabel=type==='shortage'?'부족':'주의';
+  let h=`<table><tr><th>#</th><th style="text-align:center">티어</th><th>품번</th><th>제품명</th><th>현재고</th><th>3개월FCST</th><th>3개월입고</th><th>Gap</th><th style="text-align:center">상태</th></tr>`;
+  items.forEach((g,i)=>{
+    const tierBg=g.tier==='S95'?'background:#ffeaea;color:#CC0000':'background:#fff3e0;color:#b8860b';
+    const gapColor=g.gap<0?'color:var(--red);font-weight:700':'color:var(--orange);font-weight:600';
+    h+=`<tr>
+      <td>${i+1}</td>
+      <td style="text-align:center"><span class="badge" style="${tierBg}">${g.tier}</span></td>
+      <td style="font-size:11px;font-family:monospace">${g.code}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name||''}</td>
+      <td>${fmt(g.current_stock)}</td><td>${fmt(g.fcst_3m)}</td><td>${fmt(g.incoming_3m)}</td>
+      <td style="${gapColor}">${fmt(g.gap)}</td>
+      <td style="text-align:center"><span class="badge ${statusCls}">${statusLabel}</span></td></tr>`;
   });
-
-  let h='';
-  for(const[period, items] of Object.entries(grouped)){
-    const totalQty=items.reduce((s,o)=>s+o.qty,0);
-    h+=`<div class="card" style="margin-bottom:12px;">
-      <div class="card-title">${period} 입고예정 <span>${items.length}건 / ${fmt(totalQty)}개</span></div>
-      <table><tr><th>제품코드</th><th>제품명</th><th>발주잔량</th><th>발주일</th><th style="text-align:center">상태</th></tr>`;
-    items.forEach(o=>{
-      h+=`<tr>
-        <td style="font-size:11px;font-family:monospace">${o.code}</td>
-        <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${o.name||''}</td>
-        <td>${fmt(o.qty)}</td>
-        <td>${o.order_date||'-'}</td>
-        <td style="text-align:center"><span class="badge" style="background:#e3f2fd;color:#156082">${o.status||'-'}</span></td></tr>`;
-    });
-    h+='</table></div>';
-  }
-  document.getElementById('sched-pending-wrap').innerHTML=h;
+  h+='</table>';
+  document.getElementById(containerId).innerHTML=h;
 }
 
-function renderSupplyGap(){
-  const sg=D.supply_gap;
-  let sgHtml='<div class="card-title">입고 vs 판매계획 Gap (3개월) <span>S95/S90 기준 — 현재고 + 3개월입고 - 3개월FCST</span></div>';
-  if(sg){
-    const sm=sg.summary;
-    sgHtml+=`<div style="display:flex;gap:16px;margin-bottom:16px;">
-      <div style="background:#ffeaea;border-radius:8px;padding:10px 18px;"><span style="color:#CC0000;font-weight:700;font-size:18px;">${sm.shortage_count}</span><span style="color:#CC0000;font-size:12px;margin-left:4px;">부족</span></div>
-      <div style="background:#fff0f0;border-radius:8px;padding:10px 18px;"><span style="color:#b8860b;font-weight:700;font-size:18px;">${sm.tight_count}</span><span style="color:#b8860b;font-size:12px;margin-left:4px;">주의</span></div>
-      <div style="background:#e8f5e9;border-radius:8px;padding:10px 18px;"><span style="color:#2d8a4e;font-weight:700;font-size:18px;">${sm.ok_count}</span><span style="color:#2d8a4e;font-size:12px;margin-left:4px;">정상</span></div>
-      <div style="background:var(--surface2);border-radius:8px;padding:10px 18px;"><span style="font-weight:600;font-size:14px;">${fmt(sm.total_gap)}</span><span style="color:var(--muted);font-size:12px;margin-left:4px;">총 Gap</span></div>
-    </div>`;
-    const top10=sg.items.slice(0,10);
-    if(top10.length){
-      sgHtml+='<div class="tbl-scroll" style="max-height:360px;"><table><tr><th style="text-align:center">티어</th><th>코드</th><th>제품명</th><th>현재고</th><th>3개월FCST</th><th>3개월입고</th><th>Gap</th><th style="text-align:center">상태</th></tr>';
-      top10.forEach(g=>{
-        const tierBg=g.tier==='S95'?'background:#ffeaea;color:#CC0000':'background:#fff3e0;color:#b8860b';
-        const gapColor=g.gap<0?'color:var(--red);font-weight:700':g.gap_status==='tight'?'color:var(--orange);font-weight:600':'';
-        const statusCls=g.gap_status==='shortage'?'b-critical':g.gap_status==='tight'?'b-warning':'b-normal';
-        const statusLabel=g.gap_status==='shortage'?'부족':g.gap_status==='tight'?'주의':'정상';
-        sgHtml+=`<tr>
-          <td style="text-align:center"><span class="badge" style="${tierBg}">${g.tier}</span></td>
-          <td style="font-size:11px;font-family:monospace">${g.code}</td>
-          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name||''}</td>
-          <td>${fmt(g.current_stock)}</td><td>${fmt(g.fcst_3m)}</td><td>${fmt(g.incoming_3m)}</td>
-          <td style="${gapColor}">${fmt(g.gap)}</td>
-          <td style="text-align:center"><span class="badge ${statusCls}">${statusLabel}</span></td></tr>`;
-      });
-      sgHtml+='</table></div>';
-    }
-  } else {
-    sgHtml+='<div style="color:var(--muted);font-size:13px;">데이터 없음</div>';
+function loadProcPlans(){return JSON.parse(localStorage.getItem(PROC_PLAN_KEY)||'{}');}
+function saveProcPlans(plans){localStorage.setItem(PROC_PLAN_KEY,JSON.stringify(plans));}
+
+function renderProcPlan(){
+  if(!D.procurement) return;
+  const allItems=[...D.procurement.shortage_groups.immediate,...D.procurement.shortage_groups.monitor];
+  if(!allItems.length){
+    document.getElementById('proc-plan-wrap').innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px;">쇼티지 항목 없음</div>';
+    return;
   }
-  document.getElementById('card-supply-gap').innerHTML=sgHtml;
+  const plans=loadProcPlans();
+  let h=`<table><tr><th>품번</th><th>제품명</th><th>Gap</th><th style="text-align:center;min-width:100px;">사유</th><th style="min-width:100px;">1차 입고예정일</th><th style="min-width:80px;">수량</th><th style="min-width:100px;">조정 예정일</th><th style="min-width:80px;">조정 수량</th><th style="min-width:50px;"></th></tr>`;
+  allItems.forEach(g=>{
+    const p=plans[g.code]||{};
+    h+=`<tr>
+      <td style="font-size:11px;font-family:monospace">${g.code}</td>
+      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name||''}</td>
+      <td style="color:var(--red);font-weight:600">${fmt(g.gap)}</td>
+      <td><select class="proc-select" id="pp-reason-${g.code}" onchange="saveProcField('${g.code}')">
+        <option value="">선택</option>
+        <option value="원료지연" ${p.reason==='원료지연'?'selected':''}>원료지연</option>
+        <option value="생산지연" ${p.reason==='생산지연'?'selected':''}>생산지연</option>
+        <option value="품질이슈" ${p.reason==='품질이슈'?'selected':''}>품질이슈</option>
+        <option value="기타" ${p.reason==='기타'?'selected':''}>기타</option>
+      </select></td>
+      <td><input type="date" class="proc-input" id="pp-date1-${g.code}" value="${p.date1||''}" onchange="saveProcField('${g.code}')"></td>
+      <td><input type="number" class="proc-input" id="pp-qty1-${g.code}" value="${p.qty1||''}" placeholder="EA" onchange="saveProcField('${g.code}')"></td>
+      <td><input type="date" class="proc-input" id="pp-date2-${g.code}" value="${p.date2||''}" onchange="saveProcField('${g.code}')"></td>
+      <td><input type="number" class="proc-input" id="pp-qty2-${g.code}" value="${p.qty2||''}" placeholder="EA" onchange="saveProcField('${g.code}')"></td>
+      <td><button class="btn-sm danger" onclick="clearProcPlan('${g.code}')" title="초기화">✕</button></td></tr>`;
+  });
+  h+='</table>';
+  document.getElementById('proc-plan-wrap').innerHTML=h;
+}
+
+function saveProcField(code){
+  const plans=loadProcPlans();
+  plans[code]={
+    reason:document.getElementById('pp-reason-'+code)?.value||'',
+    date1:document.getElementById('pp-date1-'+code)?.value||'',
+    qty1:document.getElementById('pp-qty1-'+code)?.value||'',
+    date2:document.getElementById('pp-date2-'+code)?.value||'',
+    qty2:document.getElementById('pp-qty2-'+code)?.value||'',
+    updated:new Date().toISOString(),
+  };
+  saveProcPlans(plans);
+}
+
+function clearProcPlan(code){
+  const plans=loadProcPlans();
+  delete plans[code];
+  saveProcPlans(plans);
+  renderProcPlan();
 }
 
 // ═══ 태스크 관리 ═══
@@ -1032,10 +1070,25 @@ function saveTask(editId){
 }
 
 // ═══ init ═══
-async function init(){
-  const r=await fetch('inventory_data.json');D=await r.json();
-  document.getElementById('updated').textContent='Updated: '+D.updated;
-  renderOverview();renderSKU();renderFC();renderSchedule();renderTasks();
+function init(){
+  const xhr=new XMLHttpRequest();
+  xhr.open('GET','inventory_data.json',true);
+  xhr.onload=function(){
+    if(xhr.status===200||xhr.status===0){
+      try{D=JSON.parse(xhr.responseText);}catch(e){console.error('JSON parse error:',e);return;}
+      document.getElementById('updated').textContent='Updated: '+D.updated;
+      try{renderOverview();}catch(e){console.error('renderOverview:',e);}
+      try{renderSKU();}catch(e){console.error('renderSKU:',e);}
+      try{renderFC();}catch(e){console.error('renderFC:',e);}
+      try{renderInventoryAnalysis();}catch(e){console.error('renderInventoryAnalysis:',e);}
+      try{renderProcurement();}catch(e){console.error('renderProcurement:',e);}
+      try{renderTasks();}catch(e){console.error('renderTasks:',e);}
+    } else {
+      console.error('Failed to load data:',xhr.status);
+    }
+  };
+  xhr.onerror=function(){console.error('XHR error');};
+  xhr.send();
 }
 init();
 </script>
